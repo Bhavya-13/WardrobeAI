@@ -84,6 +84,8 @@ export default function ItemGrid({ items }: { items: Item[] }) {
         formality: editing.formality,
         season: editing.season,
         tag_status: "done",
+        tag_source: "user", // AI re-checks never overwrite your fixes
+        tag_claimed_at: null,
       })
       .eq("id", editing.id);
     setSaving(false);

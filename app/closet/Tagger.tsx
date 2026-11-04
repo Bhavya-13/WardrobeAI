@@ -10,14 +10,14 @@ type TagResult = {
   error?: string;
 };
 
-async function tagOne(id: string): Promise<TagResult> {
+async function tagOne(id: string, recheck: boolean): Promise<TagResult> {
   for (let attempt = 0; attempt < 3; attempt++) {
     let res: Response;
     try {
       res = await fetch("/api/tag", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ itemId: id }),
+        body: JSON.stringify({ itemId: id, recheck }),
       });
     } catch {
       return { result: "failed", error: "network error" };
@@ -40,35 +40,40 @@ async function tagOne(id: string): Promise<TagResult> {
 export default function Tagger({
   pendingIds,
   failedIds,
+  staleIds,
 }: {
   pendingIds: string[];
   failedIds: string[];
+  staleIds: string[];
 }) {
   const router = useRouter();
   const runningRef = useRef(false);
   const attempted = useRef<Set<string>>(new Set());
   const [running, setRunning] = useState(false);
+  const [rechecking, setRechecking] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [message, setMessage] = useState<string | null>(null);
 
-  async function run(ids: string[]) {
+  async function run(ids: string[], recheck: boolean) {
     if (runningRef.current || ids.length === 0) return;
     runningRef.current = true;
     setRunning(true);
+    setRechecking(recheck);
     setMessage(null);
     setProgress({ done: 0, total: ids.length });
 
     let done = 0;
     let stopMsg: string | null = null;
     for (const id of ids) {
-      const r = await tagOne(id);
+      const r = await tagOne(id, recheck);
       if (r.result === "fatal") {
         stopMsg = `AI tagging stopped: ${r.error ?? "configuration problem"}`;
         break;
       }
       if (r.result === "retry") {
-        stopMsg =
-          "Hit the free rate limit. Wait a minute, then press the button to continue.";
+        stopMsg = recheck
+          ? null // background re-check: stay quiet, try again next visit
+          : "Hit the free AI limit (it can also be the daily cap, which resets at midnight Pacific time). Untagged items stay saved in the queue. Press the button later to continue.";
         break;
       }
       done++;
@@ -78,32 +83,52 @@ export default function Tagger({
 
     runningRef.current = false;
     setRunning(false);
+    setRechecking(false);
     setMessage(stopMsg);
     router.refresh();
   }
 
-  // Automatically tag new photos once (never loops on failures).
   const pendingKey = pendingIds.join(",");
+  const staleKey = staleIds.join(",");
+
   useEffect(() => {
-    const fresh = pendingIds.filter((id) => !attempted.current.has(id));
-    if (fresh.length === 0 || runningRef.current) return;
-    fresh.forEach((id) => attempted.current.add(id));
-    void run(fresh);
+    if (runningRef.current) return;
+
+    // 1) New untagged photos: tag each one once per page visit.
+    const freshPending = pendingIds.filter((id) => !attempted.current.has(id));
+    if (freshPending.length > 0) {
+      freshPending.forEach((id) => attempted.current.add(id));
+      void run(freshPending, false);
+      return;
+    }
+    if (pendingIds.length > 0) return; // tried already; wait for the button
+
+    // 2) Everything is tagged: quietly re-check a few old AI tags.
+    const freshStale = staleIds.filter((id) => !attempted.current.has(id));
+    if (freshStale.length > 0) {
+      freshStale.forEach((id) => attempted.current.add(id));
+      void run(freshStale, true);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingKey]);
+  }, [pendingKey, staleKey]);
 
   const allIds = [...pendingIds, ...failedIds];
 
   return (
     <div className="mt-4 text-sm">
-      {running && (
+      {running && !rechecking && (
         <p className="text-[#1F1F1F]/70">
           AI is tagging your clothes... {progress.done}/{progress.total}
         </p>
       )}
+      {running && rechecking && (
+        <p className="text-xs text-[#1F1F1F]/50">
+          Double-checking a few older labels in the background...
+        </p>
+      )}
       {!running && allIds.length > 0 && (
         <button
-          onClick={() => run(allIds)}
+          onClick={() => run(allIds, false)}
           className="rounded-xl border border-[#1F1F1F] px-4 py-2 transition hover:bg-[#1F1F1F] hover:text-white"
         >
           Tag {allIds.length} {allIds.length === 1 ? "item" : "items"} with AI
