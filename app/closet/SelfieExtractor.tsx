@@ -3,7 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { DEFAULT_MARGIN, EYEWEAR_MIN_MARGIN, pretty } from "@/lib/wardrobe";
+import {
+  DEFAULT_MARGIN,
+  EYEWEAR_MIN_MARGIN,
+  TAG_VERSION,
+  pretty,
+} from "@/lib/wardrobe";
 
 const MAX_PHOTOS = 10; // photos per batch (keeps phones from running out of memory)
 const PREVIEW_SIDE = 1000; // size kept in memory for the review screen
@@ -13,12 +18,25 @@ const PARALLEL = 2; // photos analysed at the same time
 
 type Box = [number, number, number, number];
 
+// Labels the AI already worked out while finding the item
+type Labels = {
+  category: string;
+  subtype: string | null;
+  color: string;
+  pattern: string;
+  formality: string;
+  season: string;
+  tags: string[];
+  is_prescription: boolean | null;
+};
+
 type Detected = {
   id: string;
   photoId: string;
   label: string;
   box: Box;
   note: string;
+  labels?: Labels;
   selected: boolean;
 };
 
@@ -116,11 +134,11 @@ function cropFrom(
   return c;
 }
 
-// Asks the server which items are in one photo. Waits and retries if the
-// free AI limit is hit.
+// Asks the server which items are in one photo (and what each one is).
+// Waits and retries if the free AI limit is hit.
 async function detect(
   image: string
-): Promise<{ label: string; box: Box; note: string }[]> {
+): Promise<{ label: string; box: Box; note: string; tags?: Labels }[]> {
   for (let attempt = 0; attempt < 3; attempt++) {
     const res = await fetch("/api/extract", {
       method: "POST",
@@ -234,6 +252,7 @@ export default function SelfieExtractor() {
               label: d.label,
               box: d.box,
               note: d.note,
+              labels: d.tags,
               selected: true,
             }));
           }
@@ -298,6 +317,7 @@ export default function SelfieExtractor() {
     });
 
     let added = 0;
+    let labelled = 0;
     let done = 0;
     const errs: string[] = [];
 
@@ -323,14 +343,38 @@ export default function SelfieExtractor() {
             .from("wardrobe")
             .upload(path, blob, { contentType: "image/jpeg" });
           if (upErr) throw upErr;
-          const { error: dbErr } = await supabase
-            .from("items")
-            .insert({ user_id: user.id, image_path: path, category: it.label });
+
+          // If the AI already labelled the item, save the labels now. No second
+          // AI request is needed. Otherwise it simply joins the tagging queue.
+          const row: Record<string, unknown> = {
+            user_id: user.id,
+            image_path: path,
+            category: it.label,
+          };
+          if (it.labels) {
+            Object.assign(row, {
+              category: it.labels.category,
+              subtype: it.labels.subtype,
+              color: it.labels.color,
+              pattern: it.labels.pattern,
+              formality: it.labels.formality,
+              season: it.labels.season,
+              tags: it.labels.tags,
+              is_prescription: it.labels.is_prescription,
+              tag_status: "done",
+              tag_source: "ai",
+              tagged_at: new Date().toISOString(),
+              tag_version: TAG_VERSION,
+            });
+          }
+
+          const { error: dbErr } = await supabase.from("items").insert(row);
           if (dbErr) {
             await supabase.storage.from("wardrobe").remove([path]);
             throw dbErr;
           }
           added++;
+          if (it.labels) labelled++;
         } catch (e) {
           errs.push(
             `${pretty(it.label)}: ${(e as { message?: string })?.message ?? "failed"}`
@@ -345,8 +389,11 @@ export default function SelfieExtractor() {
     setStep("idle");
     if (errs.length > 0) setError(errs.join(" | "));
     if (added > 0) {
+      const word = added === 1 ? "item" : "items";
       setNotice(
-        `Added ${added} ${added === 1 ? "item" : "items"}. AI is tagging them now.`
+        labelled === added
+          ? `Added ${added} ${word}, already labelled.`
+          : `Added ${added} ${word}. AI is labelling the rest now.`
       );
     }
     router.refresh();
@@ -434,9 +481,9 @@ export default function SelfieExtractor() {
             </h3>
             <p className="mb-3 mt-1 text-sm text-ink/60">
               {items.length} {items.length === 1 ? "item" : "items"} from{" "}
-              {photos.length} {photos.length === 1 ? "photo" : "photos"}. Tap an
-              item to untick it. Your photos are not saved, only the items you
-              add.
+              {photos.length} {photos.length === 1 ? "photo" : "photos"}, already
+              labelled. Tap an item to untick it. Your photos are not saved,
+              only the items you add.
               {photos.length > 1 &&
                 " Same piece in several photos? Untick the repeats."}
             </p>
@@ -495,65 +542,75 @@ export default function SelfieExtractor() {
                   </div>
 
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                    {mine.map((it) => (
-                      <button
-                        key={it.id}
-                        disabled={busy}
-                        onClick={() =>
-                          setItems(
-                            items.map((x) =>
-                              x.id === it.id ? { ...x, selected: !x.selected } : x
-                            )
+                    {mine.map((it) => {
+                      const lb = it.labels;
+                      const title = lb
+                        ? pretty(
+                            `${lb.color && lb.color !== "unknown" ? lb.color + " " : ""}${lb.subtype ?? lb.category}`
                           )
-                        }
-                        aria-pressed={it.selected}
-                        className={`relative overflow-hidden rounded-2xl bg-paper text-left shadow-soft ring-2 transition ${
-                          it.selected ? "ring-clay" : "opacity-50 ring-transparent"
-                        }`}
-                      >
-                        {previews[it.id] ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={previews[it.id]}
-                            alt={it.note || it.label}
-                            className="aspect-square w-full bg-sand/50 object-contain"
-                          />
-                        ) : (
-                          <div className="aspect-square w-full bg-sand/50" />
-                        )}
-                        <span
-                          className={`absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full border text-cream ${
-                            it.selected
-                              ? "border-clay bg-clay"
-                              : "border-ink/30 bg-paper"
+                        : pretty(it.label);
+                      return (
+                        <button
+                          key={it.id}
+                          disabled={busy}
+                          onClick={() =>
+                            setItems(
+                              items.map((x) =>
+                                x.id === it.id ? { ...x, selected: !x.selected } : x
+                              )
+                            )
+                          }
+                          aria-pressed={it.selected}
+                          className={`relative overflow-hidden rounded-2xl bg-paper text-left shadow-soft ring-2 transition ${
+                            it.selected ? "ring-clay" : "opacity-50 ring-transparent"
                           }`}
                         >
-                          {it.selected && (
-                            <svg
-                              width="14"
-                              height="14"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="3"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              aria-hidden="true"
-                            >
-                              <path d="M5 12.5l4.5 4.5L19 7.5" />
-                            </svg>
+                          {previews[it.id] ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={previews[it.id]}
+                              alt={it.note || it.label}
+                              className="aspect-square w-full bg-sand/50 object-contain"
+                            />
+                          ) : (
+                            <div className="aspect-square w-full bg-sand/50" />
                           )}
-                        </span>
-                        <div className="px-3 py-2">
-                          <p className="text-xs font-medium capitalize">
-                            {pretty(it.label)}
-                          </p>
-                          <p className="truncate text-[11px] text-ink/55">
-                            {it.note}
-                          </p>
-                        </div>
-                      </button>
-                    ))}
+                          <span
+                            className={`absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full border text-cream ${
+                              it.selected
+                                ? "border-clay bg-clay"
+                                : "border-ink/30 bg-paper"
+                            }`}
+                          >
+                            {it.selected && (
+                              <svg
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="3"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                aria-hidden="true"
+                              >
+                                <path d="M5 12.5l4.5 4.5L19 7.5" />
+                              </svg>
+                            )}
+                          </span>
+                          <div className="px-3 py-2">
+                            <p className="truncate text-xs font-medium capitalize">
+                              {title}
+                            </p>
+                            <p className="truncate text-[11px] capitalize text-ink/55">
+                              {lb
+                                ? `${pretty(lb.category)} / ${pretty(lb.formality)}`
+                                : it.note}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </section>
               );

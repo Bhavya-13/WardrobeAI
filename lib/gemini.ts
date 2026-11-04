@@ -64,7 +64,7 @@ export async function callGeminiJson(opts: {
   }
 }
 
-// ---------- Tagging one clothing photo ----------
+// ---------- Shared labelling rules (used for single photos AND for photo extraction) ----------
 
 export type ClothingTags = {
   category: string;
@@ -77,11 +77,7 @@ export type ClothingTags = {
   is_prescription: boolean | null;
 };
 
-const TAG_PROMPT = `You are a fashion expert cataloguing a personal wardrobe.
-The photo shows ONE clothing item or accessory (it may be on a bed, hanger, floor or a person, or be a loose crop from a larger photo). Describe only the main item.
-Rules:
-- category: top (shirts, tees, polos, kurtas, sweaters), bottom (jeans, trousers, skirts, shorts), one_piece (dresses, sarees, jumpsuits), outerwear (jackets, coats, blazers, hoodies), footwear, eyewear (glasses and sunglasses), bag, accessory (watch, belt, scarf, jewellery, cap), or other.
-- subtype: the specific garment type in 1-2 lowercase words, e.g. t-shirt, polo, shirt, kurta, jeans, chinos, shorts, joggers, sneakers, sandals, jacket, hoodie, glasses, sunglasses. Be careful to tell shorts apart from long trousers.
+export const TAG_FIELD_RULES = `- subtype: the specific garment type in 1-2 lowercase words, e.g. t-shirt, polo, shirt, kurta, jeans, chinos, shorts, joggers, sneakers, sandals, jacket, hoodie, glasses, sunglasses. Be careful to tell shorts apart from long trousers.
 - color: the main color in 1-2 plain words, e.g. "navy blue", "off white", "olive green". For eyewear use the frame color.
 - pattern: the visible pattern.
 - formality: how dressy it is. Use "traditional" for ethnic or festive Indian wear.
@@ -89,39 +85,26 @@ Rules:
 - tags: 3 to 6 short lowercase words describing the type and style, e.g. ["oversized", "cotton", "streetwear"].
 - is_prescription: only for eyewear. true if it looks like clear-lens prescription glasses, false if the lenses are dark or tinted (sunglasses). For anything that is not eyewear, return false.`;
 
-const TAG_SCHEMA = {
-  type: "OBJECT",
-  properties: {
-    category: { type: "STRING", enum: [...CATEGORIES] },
-    subtype: { type: "STRING" },
-    color: { type: "STRING" },
-    pattern: { type: "STRING", enum: [...PATTERNS] },
-    formality: { type: "STRING", enum: [...FORMALITY] },
-    season: { type: "STRING", enum: [...SEASONS] },
-    tags: { type: "ARRAY", items: { type: "STRING" } },
-    is_prescription: { type: "BOOLEAN" },
-  },
-  required: [
-    "category",
-    "subtype",
-    "color",
-    "pattern",
-    "formality",
-    "season",
-    "tags",
-    "is_prescription",
-  ],
-  propertyOrdering: [
-    "category",
-    "subtype",
-    "color",
-    "pattern",
-    "formality",
-    "season",
-    "tags",
-    "is_prescription",
-  ],
+// Schema pieces for those fields (everything except category)
+export const TAG_PROPS = {
+  subtype: { type: "STRING" },
+  color: { type: "STRING" },
+  pattern: { type: "STRING", enum: [...PATTERNS] },
+  formality: { type: "STRING", enum: [...FORMALITY] },
+  season: { type: "STRING", enum: [...SEASONS] },
+  tags: { type: "ARRAY", items: { type: "STRING" } },
+  is_prescription: { type: "BOOLEAN" },
 };
+
+export const TAG_FIELD_NAMES = [
+  "subtype",
+  "color",
+  "pattern",
+  "formality",
+  "season",
+  "tags",
+  "is_prescription",
+];
 
 function pick<T extends readonly string[]>(
   value: unknown,
@@ -135,7 +118,8 @@ function pick<T extends readonly string[]>(
   return (allowed as readonly string[]).includes(v) ? (v as T[number]) : fallback;
 }
 
-function normalize(raw: Record<string, unknown>): ClothingTags {
+// Cleans the AI's answer so the database only ever sees valid values.
+export function normalizeTags(raw: Record<string, unknown>): ClothingTags {
   const tags = Array.isArray(raw.tags)
     ? raw.tags
         .map((t) => String(t).toLowerCase().trim())
@@ -156,6 +140,24 @@ function normalize(raw: Record<string, unknown>): ClothingTags {
   };
 }
 
+// ---------- Tagging one clothing photo ----------
+
+const TAG_PROMPT = `You are a fashion expert cataloguing a personal wardrobe.
+The photo shows ONE clothing item or accessory (it may be on a bed, hanger, floor or a person, or be a loose crop from a larger photo). Describe only the main item.
+Rules:
+- category: top (shirts, tees, polos, kurtas, sweaters), bottom (jeans, trousers, skirts, shorts), one_piece (dresses, sarees, jumpsuits), outerwear (jackets, coats, blazers, hoodies), footwear, eyewear (glasses and sunglasses), bag, accessory (watch, belt, scarf, jewellery, cap), or other.
+${TAG_FIELD_RULES}`;
+
+const TAG_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    category: { type: "STRING", enum: [...CATEGORIES] },
+    ...TAG_PROPS,
+  },
+  required: ["category", ...TAG_FIELD_NAMES],
+  propertyOrdering: ["category", ...TAG_FIELD_NAMES],
+};
+
 export async function tagClothing(
   base64Image: string,
   mimeType: string
@@ -169,5 +171,5 @@ export async function tagClothing(
     schema: TAG_SCHEMA,
     temperature: 0.2,
   });
-  return normalize(raw);
+  return normalizeTags(raw);
 }

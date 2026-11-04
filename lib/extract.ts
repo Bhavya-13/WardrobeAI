@@ -1,4 +1,5 @@
-// Finds each clothing item worn by the person in a photo (bounding boxes).
+// Finds each clothing item worn by the person in a photo (bounding boxes) AND
+// labels it (type, colour, style...) in the same single AI request.
 // The browser then crops the boxes out of the original photo.
 
 import {
@@ -6,6 +7,11 @@ import {
   GeminiError,
   OUTFIT_MODEL,
   TAG_MODEL,
+  TAG_FIELD_RULES,
+  TAG_PROPS,
+  TAG_FIELD_NAMES,
+  normalizeTags,
+  type ClothingTags,
 } from "./gemini";
 
 export type DetectedItem = {
@@ -13,6 +19,8 @@ export type DetectedItem = {
   // [ymin, xmin, ymax, xmax], each 0 to 1000 relative to the image size
   box: [number, number, number, number];
   note: string;
+  // Already labelled, so no second AI request is needed for this item
+  tags: ClothingTags;
 };
 
 const LABELS = [
@@ -48,9 +56,10 @@ const SCHEMA = {
           label: { type: "STRING", enum: [...LABELS] },
           box_2d: { type: "ARRAY", items: { type: "INTEGER" } },
           note: { type: "STRING" },
+          ...TAG_PROPS,
         },
-        required: ["label", "box_2d", "note"],
-        propertyOrdering: ["label", "box_2d", "note"],
+        required: ["label", "box_2d", "note", ...TAG_FIELD_NAMES],
+        propertyOrdering: ["label", "box_2d", "note", ...TAG_FIELD_NAMES],
       },
     },
   },
@@ -63,6 +72,8 @@ Return one entry per item with:
 - label: top, bottom, one_piece, outerwear, footwear, eyewear, bag or accessory
 - box_2d: a tight bounding box [ymin, xmin, ymax, xmax] with every value from 0 to 1000, relative to the image size
 - note: 3 to 6 words describing it (colour and type)
+Then describe each item with these fields:
+${TAG_FIELD_RULES}
 Rules:
 - Shoes: return ONE box that covers both shoes (label footwear), only if they are visible.
 - Eyewear: only glasses or sunglasses that are actually visible. One box around the frames.
@@ -112,6 +123,8 @@ export async function detectItems(
       label,
       box: [ymin, xmin, ymax, xmax],
       note: String(it.note ?? "").trim().slice(0, 60),
+      // the label decides the category; the rest is cleaned up for the database
+      tags: normalizeTags({ ...it, category: label }),
     });
   }
 
