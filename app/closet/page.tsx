@@ -1,0 +1,82 @@
+import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
+import Uploader from "./Uploader";
+import ItemGrid from "./ItemGrid";
+
+// Per-user page (reads the login cookie), so it renders on every request.
+export const instant = false;
+
+export default async function ClosetPage() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect("/login");
+
+  const { data: rows } = await supabase
+    .from("items")
+    .select("id, image_path, category, color")
+    .order("created_at", { ascending: false });
+
+  const items = rows ?? [];
+
+  // Photos are private, so we create temporary (1 hour) viewing links.
+  const urlByPath: Record<string, string> = {};
+  if (items.length > 0) {
+    const { data: signed } = await supabase.storage
+      .from("wardrobe")
+      .createSignedUrls(
+        items.map((i) => i.image_path),
+        3600
+      );
+    signed?.forEach((s) => {
+      if (s.path && s.signedUrl) urlByPath[s.path] = s.signedUrl;
+    });
+  }
+
+  const gridItems = items.map((i) => ({
+    id: i.id as string,
+    image_path: i.image_path as string,
+    url: urlByPath[i.image_path] ?? "",
+    category: (i.category as string | null) ?? null,
+    color: (i.color as string | null) ?? null,
+  }));
+
+  async function signOut() {
+    "use server";
+    const supabase = await createClient();
+    await supabase.auth.signOut();
+    redirect("/login");
+  }
+
+  const name = user.user_metadata?.full_name ?? user.email;
+
+  return (
+    <main className="min-h-screen bg-[#F6F1EA] px-5 py-8 text-[#1F1F1F]">
+      <div className="mx-auto max-w-5xl">
+        <header className="mb-8 flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Outfi</h1>
+            <p className="text-sm text-[#1F1F1F]/60">Hi, {name}</p>
+          </div>
+          <form action={signOut}>
+            <button className="rounded-xl border border-[#1F1F1F] px-4 py-2 text-sm transition hover:bg-[#1F1F1F] hover:text-white">
+              Sign out
+            </button>
+          </form>
+        </header>
+
+        <section className="mb-8">
+          <h2 className="mb-1 text-xl font-semibold">Your closet</h2>
+          <p className="mb-4 text-sm text-[#1F1F1F]/60">
+            {gridItems.length} {gridItems.length === 1 ? "item" : "items"}. Add
+            photos of your clothes, one item per photo works best.
+          </p>
+          <Uploader />
+        </section>
+
+        <ItemGrid items={gridItems} />
+      </div>
+    </main>
+  );
+}
