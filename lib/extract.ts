@@ -23,6 +23,13 @@ export type DetectedItem = {
   tags: ClothingTags;
 };
 
+// What happened, so the app can explain an empty result instead of just failing.
+export type Diagnostics = {
+  raw: number; // how many items the AI reported
+  kept: number; // how many were usable
+  dropped: string[]; // why the others were thrown away
+};
+
 const LABELS = [
   "top",
   "bottom",
@@ -81,47 +88,48 @@ Rules:
 - A dress, saree or jumpsuit is one_piece, so do not also return a top or bottom for it.
 - Do not return skin, hair or the background. Do not guess items that are hidden or cut off.`;
 
-export async function detectItems(
-  base64Image: string,
-  mimeType: string
-): Promise<DetectedItem[]> {
-  const models = OUTFIT_MODEL === TAG_MODEL ? [OUTFIT_MODEL] : [OUTFIT_MODEL, TAG_MODEL];
-  let raw: Record<string, unknown> | undefined;
-  let lastErr: unknown;
-  for (const model of models) {
-    try {
-      raw = await callGeminiJson({
-        model,
-        parts: [
-          { text: PROMPT },
-          { inline_data: { mime_type: mimeType, data: base64Image } },
-        ],
-        schema: SCHEMA,
-        temperature: 0.1,
-      });
-      break;
-    } catch (e) {
-      lastErr = e;
-      if (e instanceof GeminiError && [404, 429, 503].includes(e.status)) continue;
-      throw e;
-    }
-  }
-  if (!raw) throw lastErr;
+const clamp = (n: number) => Math.min(1000, Math.max(0, Math.round(n)));
 
+// Accepts the box in slightly different shapes instead of rejecting it.
+function parseBox(v: unknown): [number, number, number, number] | null {
+  let arr: unknown = v;
+  if (Array.isArray(arr) && arr.length === 1 && Array.isArray(arr[0])) arr = arr[0];
+  if (!Array.isArray(arr) || arr.length !== 4) return null;
+  let nums = arr.map((n: unknown) => Number(n));
+  if (nums.some((n) => !Number.isFinite(n))) return null;
+  if (Math.max(...nums) <= 1.5) nums = nums.map((n) => n * 1000); // 0 to 1 scale
+  const [a, b, c, d] = nums.map(clamp);
+  // tolerate swapped corners
+  return [Math.min(a, c), Math.min(b, d), Math.max(a, c), Math.max(b, d)];
+}
+
+function processItems(raw: Record<string, unknown>): {
+  items: DetectedItem[];
+  diagnostics: Diagnostics;
+} {
   const list = Array.isArray(raw.items) ? (raw.items as Record<string, unknown>[]) : [];
-  const clamp = (n: number) => Math.min(1000, Math.max(0, Math.round(n)));
+  const dropped: string[] = [];
   const found: DetectedItem[] = [];
 
   for (const it of list) {
     const label = String(it.label ?? "").toLowerCase().trim();
-    if (!(LABELS as readonly string[]).includes(label)) continue;
-    const nums = Array.isArray(it.box_2d) ? it.box_2d.map((n: unknown) => Number(n)) : [];
-    if (nums.length !== 4 || nums.some((n: number) => !Number.isFinite(n))) continue;
-    const [ymin, xmin, ymax, xmax] = nums.map(clamp);
-    if (ymax - ymin < 15 || xmax - xmin < 15) continue; // too tiny to be real
+    if (!(LABELS as readonly string[]).includes(label)) {
+      dropped.push(`an unknown item type (${label || "empty"})`);
+      continue;
+    }
+    const box = parseBox(it.box_2d);
+    if (!box) {
+      dropped.push(`the ${label} had no usable position`);
+      continue;
+    }
+    const [ymin, xmin, ymax, xmax] = box;
+    if (ymax - ymin < 8 || xmax - xmin < 8) {
+      dropped.push(`the ${label} looked too small`);
+      continue;
+    }
     found.push({
       label,
-      box: [ymin, xmin, ymax, xmax],
+      box,
       note: String(it.note ?? "").trim().slice(0, 60),
       // the label decides the category; the rest is cleaned up for the database
       tags: normalizeTags({ ...it, category: label }),
@@ -143,5 +151,49 @@ export async function detectItems(
     result.push(...arr.slice(0, label === "accessory" ? 3 : 1));
   });
   result.sort((a, b) => (ORDER[a.label] ?? 9) - (ORDER[b.label] ?? 9));
-  return result;
+
+  return {
+    items: result,
+    diagnostics: { raw: list.length, kept: result.length, dropped: dropped.slice(0, 5) },
+  };
+}
+
+export async function detectItems(
+  base64Image: string,
+  mimeType: string
+): Promise<{ items: DetectedItem[]; diagnostics: Diagnostics }> {
+  const models = OUTFIT_MODEL === TAG_MODEL ? [OUTFIT_MODEL] : [OUTFIT_MODEL, TAG_MODEL];
+  let last: { items: DetectedItem[]; diagnostics: Diagnostics } | null = null;
+
+  for (let i = 0; i < models.length; i++) {
+    const hasNext = i < models.length - 1;
+    try {
+      const raw = await callGeminiJson({
+        model: models[i],
+        parts: [
+          { text: PROMPT },
+          { inline_data: { mime_type: mimeType, data: base64Image } },
+        ],
+        schema: SCHEMA,
+        temperature: 0.1,
+        maxOutputTokens: 8192, // room for several items with full labels
+      });
+      const result = processItems(raw);
+      last = result;
+      // Found something, or nothing left to try: done. Otherwise ask the second model.
+      if (result.items.length > 0 || !hasNext) return result;
+    } catch (e) {
+      if (
+        hasNext &&
+        e instanceof GeminiError &&
+        [404, 422, 429, 503].includes(e.status)
+      ) {
+        continue;
+      }
+      if (last) return last; // the first model answered (empty), the second failed
+      throw e;
+    }
+  }
+  if (last) return last;
+  throw new GeminiError("The AI did not answer", 502, "bad_answer");
 }

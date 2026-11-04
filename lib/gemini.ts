@@ -6,13 +6,30 @@ import { CATEGORIES, PATTERNS, FORMALITY, SEASONS } from "./wardrobe";
 export const TAG_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
 export const OUTFIT_MODEL = process.env.GEMINI_OUTFIT_MODEL || "gemini-3.8-flash";
 
+// code explains WHY a request failed:
+//   busy       rate limit or the AI service had a hiccup (worth retrying)
+//   config     bad key, wrong model name, rejected request
+//   blocked    the AI refused to look at the photo
+//   cut_off    the AI ran out of room and its answer was cut short
+//   bad_answer the AI answered with something unreadable or nothing at all
 export class GeminiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  code: string;
+  constructor(message: string, status: number, code = "error") {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
+
+const BLOCK_FINISH = [
+  "SAFETY",
+  "PROHIBITED_CONTENT",
+  "BLOCKLIST",
+  "SPII",
+  "IMAGE_SAFETY",
+  "RECITATION",
+];
 
 // Sends one request and returns the parsed JSON answer.
 export async function callGeminiJson(opts: {
@@ -20,11 +37,12 @@ export async function callGeminiJson(opts: {
   parts: unknown[];
   schema: unknown;
   temperature?: number;
+  maxOutputTokens?: number;
 }): Promise<Record<string, unknown>> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) {
     // 401 = treated as a configuration problem by the API routes
-    throw new GeminiError("GEMINI_API_KEY is not set on the server", 401);
+    throw new GeminiError("GEMINI_API_KEY is not set on the server", 401, "config");
   }
 
   const res = await fetch(
@@ -41,6 +59,7 @@ export async function callGeminiJson(opts: {
           responseMimeType: "application/json",
           responseSchema: opts.schema,
           temperature: opts.temperature ?? 0.2,
+          maxOutputTokens: opts.maxOutputTokens,
         },
       }),
     }
@@ -48,19 +67,47 @@ export async function callGeminiJson(opts: {
 
   if (!res.ok) {
     const text = await res.text();
-    throw new GeminiError(`Gemini ${res.status}: ${text.slice(0, 300)}`, res.status);
+    const code =
+      res.status === 429 || res.status >= 500
+        ? "busy"
+        : [400, 401, 403, 404].includes(res.status)
+          ? "config"
+          : "error";
+    throw new GeminiError(`Gemini ${res.status}: ${text.slice(0, 300)}`, res.status, code);
   }
 
   const json = await res.json();
-  const parts: { text?: string }[] = json?.candidates?.[0]?.content?.parts ?? [];
+  const blockReason = json?.promptFeedback?.blockReason as string | undefined;
+  const candidate = json?.candidates?.[0];
+  const finish = candidate?.finishReason as string | undefined;
+  const parts: { text?: string }[] = candidate?.content?.parts ?? [];
   const text = parts.map((p) => p.text ?? "").join("");
+
   if (!text) {
-    throw new GeminiError("Gemini returned no answer", 422);
+    if (blockReason || (finish && BLOCK_FINISH.includes(finish))) {
+      throw new GeminiError(
+        `The AI declined to look at this (${blockReason ?? finish})`,
+        422,
+        "blocked"
+      );
+    }
+    if (finish === "MAX_TOKENS") {
+      throw new GeminiError("The AI ran out of room for its answer", 422, "cut_off");
+    }
+    throw new GeminiError(
+      `The AI returned no answer${finish ? ` (${finish})` : ""}`,
+      422,
+      "bad_answer"
+    );
   }
+
   try {
     return JSON.parse(text);
   } catch {
-    throw new GeminiError("Gemini returned an unreadable answer", 422);
+    if (finish === "MAX_TOKENS") {
+      throw new GeminiError("The AI's answer was cut off", 422, "cut_off");
+    }
+    throw new GeminiError("The AI's answer could not be read", 422, "bad_answer");
   }
 }
 

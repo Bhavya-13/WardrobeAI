@@ -11,7 +11,10 @@ export async function POST(request: Request) {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) {
-    return NextResponse.json({ error: "Not logged in" }, { status: 401 });
+    return NextResponse.json(
+      { error: "Not logged in", code: "auth" },
+      { status: 401 }
+    );
   }
 
   let body: { image?: string; mime?: string } = {};
@@ -20,33 +23,43 @@ export async function POST(request: Request) {
   } catch {}
   const image = String(body.image ?? "");
   if (!image) {
-    return NextResponse.json({ error: "No photo received" }, { status: 400 });
+    return NextResponse.json(
+      { error: "No photo received", code: "error" },
+      { status: 400 }
+    );
   }
   if (image.length > 3_500_000) {
-    return NextResponse.json({ error: "That photo is too large" }, { status: 413 });
+    return NextResponse.json(
+      { error: "That photo is too large", code: "too_large" },
+      { status: 413 }
+    );
   }
   const mime = body.mime === "image/png" ? "image/png" : "image/jpeg";
 
   try {
-    const items = await detectItems(image, mime);
-    return NextResponse.json({ items });
+    const { items, diagnostics } = await detectItems(image, mime);
+    return NextResponse.json({ items, diagnostics });
   } catch (e) {
     if (e instanceof GeminiError) {
-      if (e.status === 429 || e.status === 500 || e.status === 503) {
-        return NextResponse.json(
-          {
-            error:
-              "The AI is busy (free tier limit). Wait about a minute and try again.",
-          },
-          { status: e.status === 429 ? 429 : 503 }
-        );
-      }
-      if ([400, 401, 403, 404].includes(e.status)) {
-        return NextResponse.json({ error: e.message }, { status: 500 });
-      }
+      const status =
+        e.code === "busy"
+          ? e.status === 429
+            ? 429
+            : 503
+          : e.code === "config"
+            ? 500
+            : 422;
+      return NextResponse.json(
+        { error: e.message, code: e.code, detail: e.message.slice(0, 200) },
+        { status }
+      );
     }
     return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Could not analyse the photo" },
+      {
+        error: e instanceof Error ? e.message : "Could not analyse the photo",
+        code: "error",
+        detail: e instanceof Error ? e.message.slice(0, 200) : undefined,
+      },
       { status: 502 }
     );
   }

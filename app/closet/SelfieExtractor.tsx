@@ -30,6 +30,8 @@ type Labels = {
   is_prescription: boolean | null;
 };
 
+type Diagnostics = { raw: number; kept: number; dropped: string[] };
+
 type Detected = {
   id: string;
   photoId: string;
@@ -46,7 +48,110 @@ type Photo = {
   thumb: string;
 };
 
+// A photo that could not be used, with the reason in plain words
+type Failure = {
+  name: string;
+  file: File;
+  reason: string;
+  tip: string;
+  detail?: string;
+  retry: boolean;
+};
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+class DetectError extends Error {
+  code: string;
+  detail?: string;
+  constructor(code: string, detail?: string) {
+    super(code);
+    this.code = code;
+    this.detail = detail;
+  }
+}
+
+// Turns a failure code into something a person can understand and act on.
+function explain(
+  code: string,
+  detail?: string,
+  diag?: Diagnostics
+): { reason: string; tip: string; retry: boolean } {
+  switch (code) {
+    case "busy":
+      return {
+        reason: "The AI was busy (free limit reached)",
+        tip: "Wait a minute, then press Try again.",
+        retry: true,
+      };
+    case "blocked":
+      return {
+        reason: "The AI declined to look at this photo",
+        tip: "Try a different photo.",
+        retry: false,
+      };
+    case "cut_off":
+      return {
+        reason: "The AI's answer was cut off",
+        tip: "Press Try again. If it keeps happening, use a photo with fewer items in view.",
+        retry: true,
+      };
+    case "bad_answer":
+      return {
+        reason: "The AI sent back something I could not read",
+        tip: "Press Try again.",
+        retry: true,
+      };
+    case "config":
+      return {
+        reason: "The AI service is not set up correctly",
+        tip: "Check GEMINI_API_KEY and the model names in your settings.",
+        retry: false,
+      };
+    case "too_large":
+      return {
+        reason: "The photo is too large to send",
+        tip: "Use a smaller photo.",
+        retry: false,
+      };
+    case "auth":
+      return {
+        reason: "Your session expired",
+        tip: "Refresh the page and log in again.",
+        retry: false,
+      };
+    case "network":
+      return {
+        reason: "The connection dropped",
+        tip: "Check your internet, then press Try again.",
+        retry: true,
+      };
+    case "unreadable":
+      return {
+        reason: "Your browser could not open this photo",
+        tip: "iPhone HEIC photos can fail in some browsers. Share it as a JPEG, or take a screenshot of it.",
+        retry: false,
+      };
+    case "no_items":
+      if (diag && diag.raw > 0) {
+        return {
+          reason: `The AI saw ${diag.raw} ${diag.raw === 1 ? "item" : "items"} but could not mark where ${diag.raw === 1 ? "it is" : "they are"}`,
+          tip: "Press Try again.",
+          retry: true,
+        };
+      }
+      return {
+        reason: "The AI did not see any clothes in this photo",
+        tip: "Use a clear, well-lit photo where your clothes are visible, ideally full-body. Pressing Try again sometimes works.",
+        retry: true,
+      };
+    default:
+      return {
+        reason: "Something went wrong analysing this photo",
+        tip: "Press Try again.",
+        retry: true,
+      };
+  }
+}
 
 function scaleToCanvas(src: ImageBitmap, maxSide: number): HTMLCanvasElement {
   const scale = Math.min(1, maxSide / Math.max(src.width, src.height));
@@ -136,24 +241,83 @@ function cropFrom(
 
 // Asks the server which items are in one photo (and what each one is).
 // Waits and retries if the free AI limit is hit.
-async function detect(
-  image: string
-): Promise<{ label: string; box: Box; note: string; tags?: Labels }[]> {
+async function detect(image: string): Promise<{
+  items: { label: string; box: Box; note: string; tags?: Labels }[];
+  diagnostics?: Diagnostics;
+}> {
   for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await fetch("/api/extract", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image, mime: "image/jpeg" }),
-    });
+    let res: Response;
+    try {
+      res = await fetch("/api/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image, mime: "image/jpeg" }),
+      });
+    } catch {
+      throw new DetectError("network");
+    }
     const body = await res.json().catch(() => ({}));
-    if (res.ok) return body.items ?? [];
-    if (res.status === 429 || res.status === 503) {
+    if (res.ok) return { items: body.items ?? [], diagnostics: body.diagnostics };
+    if (body.code === "busy" || res.status === 429 || res.status === 503) {
       await sleep(6000 * (attempt + 1));
       continue;
     }
-    throw new Error(body.error ?? "Could not analyse the photo.");
+    throw new DetectError(body.code ?? "error", body.detail ?? body.error);
   }
-  throw new Error("The AI is busy. Try again in a minute.");
+  throw new DetectError("busy");
+}
+
+// The list of photos that did not work, each with its reason.
+function FailureList({
+  failures,
+  busy,
+  onRetry,
+  onDismiss,
+}: {
+  failures: Failure[];
+  busy: boolean;
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
+  if (failures.length === 0) return null;
+  const retryable = failures.filter((f) => f.retry).length;
+  return (
+    <div className="mb-4 rounded-2xl bg-blush/50 p-4 text-sm">
+      <p className="font-medium">
+        {failures.length} {failures.length === 1 ? "photo" : "photos"} could not
+        be used
+      </p>
+      <ul className="mt-2 space-y-3">
+        {failures.map((f, i) => (
+          <li key={i}>
+            <p className="truncate font-medium text-ink/90">{f.name}</p>
+            <p className="text-ink/75">
+              {f.reason}. {f.tip}
+            </p>
+            {f.detail && (
+              <p className="mt-0.5 break-words text-[11px] text-ink/45">
+                {f.detail}
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {retryable > 0 && (
+          <button
+            onClick={onRetry}
+            disabled={busy}
+            className="btn btn-primary btn-sm"
+          >
+            Try {retryable === 1 ? "it" : `these ${retryable}`} again
+          </button>
+        )}
+        <button onClick={onDismiss} disabled={busy} className="btn btn-ghost btn-sm">
+          Dismiss
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export default function SelfieExtractor() {
@@ -167,7 +331,8 @@ export default function SelfieExtractor() {
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [skipped, setSkipped] = useState<string[]>([]);
+  const [notes, setNotes] = useState<string[]>([]);
+  const [failures, setFailures] = useState<Failure[]>([]);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [items, setItems] = useState<Detected[]>([]);
   const [margin, setMargin] = useState(DEFAULT_MARGIN);
@@ -193,7 +358,103 @@ export default function SelfieExtractor() {
     setPhotos([]);
     setItems([]);
     setPreviews({});
-    setSkipped([]);
+    setNotes([]);
+    setFailures([]);
+  }
+
+  // Analyses a list of photos. Used for the first pick and for "Try again".
+  async function runDetection(files: File[]): Promise<{
+    photos: Photo[];
+    items: Detected[];
+    failures: Failure[];
+  }> {
+    setProgress({ done: 0, total: files.length });
+
+    const okPhotos: (Photo | null)[] = new Array(files.length).fill(null);
+    const foundByIndex: Detected[][] = files.map(() => []);
+    const failed: Failure[] = [];
+    let next = 0;
+    let done = 0;
+
+    const fail = (
+      file: File,
+      code: string,
+      detail?: string,
+      diag?: Diagnostics
+    ) => {
+      const e = explain(code, detail, diag);
+      failed.push({
+        name: file.name,
+        file,
+        reason: e.reason,
+        tip: e.tip,
+        detail: detail && code !== "no_items" ? detail : undefined,
+        retry: e.retry,
+      });
+    };
+
+    async function worker() {
+      while (next < files.length) {
+        const index = next++;
+        const file = files[index];
+        const photoId = crypto.randomUUID();
+        try {
+          let bitmap: ImageBitmap;
+          try {
+            bitmap = await createImageBitmap(file);
+          } catch {
+            fail(file, "unreadable");
+            continue;
+          }
+          const preview = scaleToCanvas(bitmap, PREVIEW_SIDE);
+          const det = scaleToCanvas(bitmap, DETECT_SIDE);
+          bitmap.close();
+
+          const image = await blobToBase64(await toBlob(det, 0.85));
+          const result = await detect(image);
+
+          if (result.items.length === 0) {
+            fail(file, "no_items", undefined, result.diagnostics);
+          } else {
+            canvasesRef.current[photoId] = preview;
+            filesRef.current[photoId] = file;
+            okPhotos[index] = {
+              id: photoId,
+              name: file.name,
+              thumb: makeThumb(preview),
+            };
+            foundByIndex[index] = result.items.map((d) => ({
+              id: crypto.randomUUID(),
+              photoId,
+              label: d.label,
+              box: d.box,
+              note: d.note,
+              labels: d.tags,
+              selected: true,
+            }));
+          }
+        } catch (e) {
+          if (e instanceof DetectError) {
+            fail(file, e.code, e.detail);
+          } else {
+            fail(file, "error", (e as { message?: string })?.message);
+          }
+        } finally {
+          done++;
+          setProgress({ done, total: files.length });
+        }
+      }
+    }
+
+    await Promise.all(
+      Array.from({ length: Math.min(PARALLEL, files.length) }, () => worker())
+    );
+
+    return {
+      photos: okPhotos.filter((p): p is Photo => p !== null),
+      items: foundByIndex.flat(),
+      failures: failed,
+    };
   }
 
   async function onPick(fileList: FileList | null) {
@@ -208,87 +469,39 @@ export default function SelfieExtractor() {
     setError(null);
     setNotice(null);
     setStep("detecting");
-    setProgress({ done: 0, total: files.length });
 
-    const skippedMsgs: string[] = [];
-    if (picked.length > MAX_PHOTOS) {
-      skippedMsgs.push(
-        `Only the first ${MAX_PHOTOS} photos were used. You can add more afterwards.`
-      );
-    }
+    const res = await runDetection(files);
 
-    const okPhotos: (Photo | null)[] = new Array(files.length).fill(null);
-    const foundByIndex: Detected[][] = files.map(() => []);
-    let next = 0;
-    let done = 0;
-
-    async function worker() {
-      while (next < files.length) {
-        const index = next++;
-        const file = files[index];
-        const photoId = crypto.randomUUID();
-        try {
-          const bitmap = await createImageBitmap(file);
-          const preview = scaleToCanvas(bitmap, PREVIEW_SIDE);
-          const det = scaleToCanvas(bitmap, DETECT_SIDE);
-          bitmap.close();
-
-          const image = await blobToBase64(await toBlob(det, 0.85));
-          const result = await detect(image);
-
-          if (result.length === 0) {
-            skippedMsgs.push(`${file.name}: no clothes found`);
-          } else {
-            canvasesRef.current[photoId] = preview;
-            filesRef.current[photoId] = file;
-            okPhotos[index] = {
-              id: photoId,
-              name: file.name,
-              thumb: makeThumb(preview),
-            };
-            foundByIndex[index] = result.map((d) => ({
-              id: crypto.randomUUID(),
-              photoId,
-              label: d.label,
-              box: d.box,
-              note: d.note,
-              labels: d.tags,
-              selected: true,
-            }));
-          }
-        } catch (e) {
-          skippedMsgs.push(
-            `${file.name}: ${(e as { message?: string })?.message ?? "could not be analysed"}`
-          );
-        }
-        done++;
-        setProgress({ done, total: files.length });
-      }
-    }
-
-    await Promise.all(
-      Array.from({ length: Math.min(PARALLEL, files.length) }, () => worker())
+    setNotes(
+      picked.length > MAX_PHOTOS
+        ? [`Only the first ${MAX_PHOTOS} photos were used. You can add more afterwards.`]
+        : []
     );
+    setFailures(res.failures);
 
-    const finalPhotos = okPhotos.filter((p): p is Photo => p !== null);
-    const finalItems = foundByIndex.flat();
-    setSkipped(skippedMsgs);
-
-    if (finalItems.length === 0) {
-      setError(
-        skippedMsgs.length > 0
-          ? skippedMsgs.join(" | ")
-          : "I could not find any clothes. Try clear, full-body photos in good light."
-      );
-      resetAll();
-      setStep("idle");
+    if (res.items.length === 0) {
+      setStep("idle"); // the reasons are shown below the button
       return;
     }
-
-    setPhotos(finalPhotos);
-    setItems(finalItems);
+    setPhotos(res.photos);
+    setItems(res.items);
     setMargin(DEFAULT_MARGIN);
     setStep("review");
+  }
+
+  async function retryFailed() {
+    const retryFiles = failures.filter((f) => f.retry).map((f) => f.file);
+    if (retryFiles.length === 0) return;
+    const keep = failures.filter((f) => !f.retry);
+    setError(null);
+    setStep("detecting");
+
+    const res = await runDetection(retryFiles);
+
+    setFailures([...keep, ...res.failures]);
+    setPhotos((p) => [...p, ...res.photos]);
+    setItems((i) => [...i, ...res.items]);
+    setStep(items.length + res.items.length > 0 ? "review" : "idle");
   }
 
   async function addSelected() {
@@ -414,6 +627,7 @@ export default function SelfieExtractor() {
 
   const selectedCount = items.filter((i) => i.selected).length;
   const busy = step === "saving";
+  const working = step === "detecting" || step === "saving";
 
   return (
     <div>
@@ -463,7 +677,7 @@ export default function SelfieExtractor() {
         </div>
       )}
 
-      {step === "idle" && !notice && !error && (
+      {step === "idle" && !notice && !error && failures.length === 0 && (
         <p className="mt-2 text-xs text-ink/50">
           Tip: select several photos at once (up to {MAX_PHOTOS}).
         </p>
@@ -471,6 +685,18 @@ export default function SelfieExtractor() {
       {notice && <p className="mt-2 text-sm text-sage">{notice}</p>}
       {error && step === "idle" && (
         <p className="mt-2 max-w-md text-sm text-red-700">{error}</p>
+      )}
+
+      {/* why a photo did not work (when nothing else is open) */}
+      {step === "idle" && failures.length > 0 && (
+        <div className="mt-4 max-w-xl">
+          <FailureList
+            failures={failures}
+            busy={working}
+            onRetry={retryFailed}
+            onDismiss={() => setFailures([])}
+          />
+        </div>
       )}
 
       {(step === "review" || step === "saving") && (
@@ -488,13 +714,20 @@ export default function SelfieExtractor() {
                 " Same piece in several photos? Untick the repeats."}
             </p>
 
-            {skipped.length > 0 && (
-              <ul className="mb-3 space-y-1 rounded-2xl bg-blush/50 px-4 py-3 text-xs text-ink/75">
-                {skipped.map((s, i) => (
+            {notes.length > 0 && (
+              <ul className="mb-3 space-y-1 rounded-2xl bg-sand/60 px-4 py-3 text-xs text-ink/75">
+                {notes.map((s, i) => (
                   <li key={i}>{s}</li>
                 ))}
               </ul>
             )}
+
+            <FailureList
+              failures={failures}
+              busy={working}
+              onRetry={retryFailed}
+              onDismiss={() => setFailures([])}
+            />
 
             <label className="mb-5 block text-xs text-ink/70">
               Space around each item: {Math.round(margin * 100)}%
