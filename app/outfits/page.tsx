@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/supabase/user";
 import AppHeader from "../components/AppHeader";
 import OutfitGenerator from "./OutfitGenerator";
 import OutfitToolbar from "./OutfitToolbar";
@@ -11,26 +12,31 @@ export const instant = false;
 
 export default async function OutfitsPage() {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getSessionUser(supabase);
   if (!user) redirect("/login");
 
-  // Saved glasses setting
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("glasses_mode")
-    .maybeSingle();
-  const savedMode = profile?.glasses_mode as string | undefined;
+  // Three independent questions, asked at the same time (faster than one by one)
+  const [profileRes, statsRes, outfitsRes] = await Promise.all([
+    supabase.from("profiles").select("glasses_mode").maybeSingle(),
+    supabase
+      .from("items")
+      .select("category, tag_status, is_prescription")
+      .is("deleted_at", null),
+    supabase
+      .from("outfits")
+      .select("id, occasion, name, reason, item_ids, liked, worn_count")
+      .eq("hidden", false)
+      .is("deleted_at", null)
+      .order("created_at", { ascending: false })
+      .limit(24),
+  ]);
+
+  const savedMode = profileRes.data?.glasses_mode as string | undefined;
   const glassesMode: GlassesMode =
     savedMode === "always" || savedMode === "never" ? savedMode : "sometimes";
 
   // Closet stats, used for helpful hints
-  const { data: stats } = await supabase
-    .from("items")
-    .select("category, tag_status, is_prescription")
-    .is("deleted_at", null);
-  const all = stats ?? [];
+  const all = statsRes.data ?? [];
   const done = all.filter((s) => s.tag_status === "done");
   const countCat = (c: string) => done.filter((s) => s.category === c).length;
   const pending = all.length - done.length;
@@ -55,16 +61,7 @@ export default async function OutfitsPage() {
       "Glasses are set to Always, but no prescription pair is marked. In Closet, tap Edit on your glasses, set the category to Eyewear and tick Prescription."
     );
 
-  // Saved outfits (hidden and deleted ones are not shown)
-  const { data: outfitRows } = await supabase
-    .from("outfits")
-    .select("id, occasion, name, reason, item_ids, liked, worn_count")
-    .eq("hidden", false)
-    .is("deleted_at", null)
-    .order("created_at", { ascending: false })
-    .limit(24);
-  const outfits = outfitRows ?? [];
-
+  const outfits = outfitsRes.data ?? [];
   const itemIds = Array.from(
     new Set(outfits.flatMap((o) => (o.item_ids as string[] | null) ?? []))
   );
@@ -72,22 +69,24 @@ export default async function OutfitsPage() {
   type ItemInfo = {
     id: string;
     image_path: string;
+    thumb_path: string | null;
     category: string | null;
     subtype: string | null;
     color: string | null;
   };
   const itemById = new Map<string, ItemInfo>();
   const urlByPath: Record<string, string> = {};
+  const shownPath = (i: ItemInfo) => i.thumb_path ?? i.image_path;
 
   if (itemIds.length > 0) {
     const { data: itemRows } = await supabase
       .from("items")
-      .select("id, image_path, category, subtype, color")
+      .select("id, image_path, thumb_path, category, subtype, color")
       .is("deleted_at", null)
       .in("id", itemIds);
     (itemRows ?? []).forEach((r) => itemById.set(r.id as string, r as ItemInfo));
 
-    const paths = (itemRows ?? []).map((r) => r.image_path as string);
+    const paths = (itemRows ?? []).map((r) => shownPath(r as ItemInfo));
     if (paths.length > 0) {
       const { data: signed } = await supabase.storage
         .from("wardrobe")
@@ -110,7 +109,8 @@ export default async function OutfitsPage() {
       )
       .map((i) => ({
         id: i.id,
-        url: urlByPath[i.image_path] ?? "",
+        key: shownPath(i),
+        url: urlByPath[shownPath(i)] ?? "",
         label: pretty(
           [i.color && i.color !== "unknown" ? i.color : null, i.subtype ?? i.category]
             .filter(Boolean)
@@ -129,7 +129,7 @@ export default async function OutfitsPage() {
   });
 
   const notLikedIds = views.filter((v) => v.liked !== true).map((v) => v.id);
-  const name = user.user_metadata?.full_name ?? user.email ?? "there";
+  const name = user.name ?? user.email ?? "there";
 
   return (
     <div className="min-h-screen bg-cream pb-28 text-ink md:pb-12">

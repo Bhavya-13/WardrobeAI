@@ -1,9 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { OCCASIONS, GLASSES_MODES, type GlassesMode } from "@/lib/wardrobe";
+import HangerLoader from "../components/HangerLoader";
+
+const HINTS = [
+  "Picking colours that work together...",
+  "Checking what you wore recently...",
+  "Matching shoes and glasses...",
+  "Making sure it suits the occasion...",
+];
 
 export default function OutfitGenerator({
   initialGlasses,
@@ -17,6 +25,15 @@ export default function OutfitGenerator({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [hint, setHint] = useState(0);
+
+  // Changes the little message while the AI works.
+  useEffect(() => {
+    if (!loading) return;
+    setHint(0);
+    const t = setInterval(() => setHint((h) => (h + 1) % HINTS.length), 2200);
+    return () => clearInterval(t);
+  }, [loading]);
 
   // Remember the glasses choice for next time.
   async function changeGlasses(value: GlassesMode) {
@@ -59,7 +76,7 @@ export default function OutfitGenerator({
   }
 
   return (
-    <div className="card p-5 sm:p-6">
+    <div className="card relative p-5 sm:p-6">
       <h2 className="font-display text-xl">What is the occasion?</h2>
 
       <div
@@ -118,6 +135,13 @@ export default function OutfitGenerator({
         <p className="mt-4 rounded-2xl bg-blush/50 px-4 py-3 text-sm">{notice}</p>
       )}
       {error && <p className="mt-4 text-sm text-red-700">{error}</p>}
+
+      {/* the hanger swings while the AI styles your outfits */}
+      {loading && (
+        <div className="absolute inset-0 z-10 grid place-items-center rounded-3xl bg-paper/90">
+          <HangerLoader size={64} label={HINTS[hint]} />
+        </div>
+      )}
     </div>
   );
 }

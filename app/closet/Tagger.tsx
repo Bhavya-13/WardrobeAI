@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { HangerSpinner } from "../components/HangerLoader";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -118,15 +119,13 @@ export default function Tagger({
     <div className="mt-4 text-sm">
       {running && !rechecking && (
         <div className="flex items-center gap-3 rounded-2xl bg-sage-soft px-4 py-3 text-ink/80">
-          <span
-            className="h-3 w-3 animate-pulse rounded-full bg-sage"
-            aria-hidden="true"
-          />
+          <HangerSpinner size={22} className="text-clay" />
           AI is tagging your clothes... {progress.done}/{progress.total}
         </div>
       )}
       {running && rechecking && (
-        <p className="text-xs text-ink/50">
+        <p className="flex items-center gap-2 text-xs text-ink/50">
+          <HangerSpinner size={14} className="text-clay" />
           Double-checking a few older labels in the background...
         </p>
       )}

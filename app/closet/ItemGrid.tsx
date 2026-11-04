@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { stableUrl } from "@/lib/urlCache";
+import Modal from "../components/Modal";
+import { HangerSpinner } from "../components/HangerLoader";
 import {
   CATEGORIES,
   PATTERNS,
@@ -15,6 +18,7 @@ import {
 export type Item = {
   id: string;
   image_path: string;
+  key: string; // storage path of the picture shown (the small preview when there is one)
   url: string;
   category: string | null;
   subtype: string | null;
@@ -74,11 +78,16 @@ function Select({
 
 export default function ItemGrid({ items }: { items: Item[] }) {
   const router = useRouter();
+  const [, startTransition] = useTransition();
   const [removed, setRemoved] = useState<Record<string, boolean>>({});
+  const [overrides, setOverrides] = useState<Record<string, Partial<Item>>>({});
   const [editing, setEditing] = useState<Item | null>(null);
-  const [saving, setSaving] = useState(false);
   const [filter, setFilter] = useState("all");
+  const [problem, setProblem] = useState<string | null>(null);
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  // refresh in the background so taps never feel stuck
+  const refresh = () => startTransition(() => router.refresh());
 
   useEffect(() => {
     const t = timers.current;
@@ -87,46 +96,64 @@ export default function ItemGrid({ items }: { items: Item[] }) {
 
   // No popup: the item is hidden at once and can be brought back with Undo.
   async function remove(item: Item) {
+    setRemoved((r) => ({ ...r, [item.id]: true }));
     const supabase = createClient();
-    await supabase
+    const { error } = await supabase
       .from("items")
       .update({ deleted_at: new Date().toISOString() })
       .eq("id", item.id);
-    setRemoved((r) => ({ ...r, [item.id]: true }));
-    timers.current[item.id] = setTimeout(() => router.refresh(), UNDO_MS);
+    if (error) {
+      setRemoved((r) => ({ ...r, [item.id]: false }));
+      setProblem("Could not remove that item. Please try again.");
+      return;
+    }
+    timers.current[item.id] = setTimeout(refresh, UNDO_MS);
   }
 
   async function undo(item: Item) {
     clearTimeout(timers.current[item.id]);
+    setRemoved((r) => ({ ...r, [item.id]: false }));
     const supabase = createClient();
     await supabase.from("items").update({ deleted_at: null }).eq("id", item.id);
-    setRemoved((r) => ({ ...r, [item.id]: false }));
-    router.refresh();
+    refresh();
   }
 
+  // The card updates instantly; saving happens in the background.
   async function saveEdit() {
     if (!editing) return;
-    setSaving(true);
+    const e = editing;
+    const patch: Partial<Item> = {
+      category: e.category,
+      subtype: e.subtype?.trim().toLowerCase() || null,
+      color: e.color?.trim().toLowerCase() || null,
+      pattern: e.pattern,
+      formality: e.formality,
+      season: e.season,
+      is_prescription: e.category === "eyewear" ? e.is_prescription === true : null,
+      tag_status: "done",
+    };
+    setOverrides((o) => ({ ...o, [e.id]: patch }));
+    setEditing(null);
+
     const supabase = createClient();
-    await supabase
+    const { error } = await supabase
       .from("items")
       .update({
-        category: editing.category,
-        subtype: editing.subtype?.trim().toLowerCase() || null,
-        color: editing.color?.trim().toLowerCase() || null,
-        pattern: editing.pattern,
-        formality: editing.formality,
-        season: editing.season,
-        is_prescription:
-          editing.category === "eyewear" ? editing.is_prescription === true : null,
-        tag_status: "done",
+        ...patch,
         tag_source: "user", // AI re-checks never overwrite your fixes
         tag_claimed_at: null,
       })
-      .eq("id", editing.id);
-    setSaving(false);
-    setEditing(null);
-    router.refresh();
+      .eq("id", e.id);
+    if (error) {
+      setOverrides((o) => {
+        const copy = { ...o };
+        delete copy[e.id];
+        return copy;
+      });
+      setProblem("Could not save that change. Please try again.");
+      return;
+    }
+    refresh();
   }
 
   if (items.length === 0) {
@@ -141,16 +168,22 @@ export default function ItemGrid({ items }: { items: Item[] }) {
     );
   }
 
+  const view = items.map((i) => ({ ...i, ...overrides[i.id] }));
+
   const counts: Record<string, number> = {};
   GROUPS.forEach((g) => {
-    counts[g.key] = items.filter((i) => g.match(i.category)).length;
+    counts[g.key] = view.filter((i) => g.match(i.category)).length;
   });
   const activeKey = counts[filter] > 0 ? filter : "all";
   const active = GROUPS.find((g) => g.key === activeKey) ?? GROUPS[0];
-  const visible = items.filter((i) => active.match(i.category));
+  const visible = view.filter((i) => active.match(i.category));
 
   return (
     <>
+      {problem && (
+        <p className="mb-4 rounded-2xl bg-blush/60 px-4 py-3 text-sm">{problem}</p>
+      )}
+
       <div
         className="no-scrollbar -mx-4 mb-5 flex gap-2 overflow-x-auto px-4 sm:mx-0 sm:flex-wrap sm:px-0"
         role="group"
@@ -185,11 +218,12 @@ export default function ItemGrid({ items }: { items: Item[] }) {
           }
 
           const done = item.tag_status === "done";
+          const failed = item.tag_status === "failed";
           const title = done
             ? pretty(
                 `${item.color && item.color !== "unknown" ? item.color + " " : ""}${item.subtype ?? item.category ?? "item"}`
               )
-            : item.tag_status === "failed"
+            : failed
               ? "Tag failed"
               : "Tagging...";
 
@@ -218,20 +252,25 @@ export default function ItemGrid({ items }: { items: Item[] }) {
               {item.url ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  src={item.url}
+                  src={stableUrl(item.key, item.url)}
+                  suppressHydrationWarning
                   alt={title}
-                  className="aspect-square w-full object-cover"
+                  className="aspect-square w-full bg-sand/40 object-cover"
                   loading="lazy"
+                  decoding="async"
                 />
               ) : (
-                <div className="aspect-square w-full bg-sand/50" />
+                <div className="skeleton aspect-square w-full" />
               )}
               <div className="px-3 pb-3 pt-2.5">
                 <p
-                  className={`text-sm font-medium capitalize ${
-                    done ? "" : "animate-pulse text-ink/50"
+                  className={`flex items-center gap-1.5 text-sm font-medium capitalize ${
+                    done ? "" : "text-ink/50"
                   }`}
                 >
+                  {!done && !failed && (
+                    <HangerSpinner size={14} className="text-clay" />
+                  )}
                   {title}
                 </p>
                 {chips.length > 0 && (
@@ -264,94 +303,83 @@ export default function ItemGrid({ items }: { items: Item[] }) {
       </div>
 
       {editing && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 sm:items-center sm:p-4"
-          onClick={() => !saving && setEditing(null)}
-        >
-          <div
-            className="sheet max-h-[92vh] w-full max-w-md overflow-y-auto overscroll-contain rounded-t-3xl bg-cream p-5 shadow-xl sm:rounded-3xl sm:p-6"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="mb-4 font-display text-2xl">Fix this item</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <Select
-                label="Category"
-                value={editing.category ?? "other"}
-                options={CATEGORIES}
-                onChange={(v) => setEditing({ ...editing, category: v })}
-              />
-              <label className="block text-xs text-ink/70">
-                Type (e.g. polo, shorts)
-                <input
-                  value={editing.subtype ?? ""}
-                  onChange={(e) =>
-                    setEditing({ ...editing, subtype: e.target.value })
-                  }
-                  maxLength={30}
-                  className="input mt-1"
-                />
-              </label>
-              <label className="block text-xs text-ink/70">
-                Color
-                <input
-                  value={editing.color ?? ""}
-                  onChange={(e) =>
-                    setEditing({ ...editing, color: e.target.value })
-                  }
-                  maxLength={40}
-                  className="input mt-1"
-                />
-              </label>
-              <Select
-                label="Pattern"
-                value={editing.pattern ?? "solid"}
-                options={PATTERNS}
-                onChange={(v) => setEditing({ ...editing, pattern: v })}
-              />
-              <Select
-                label="Formality"
-                value={editing.formality ?? "casual"}
-                options={FORMALITY}
-                onChange={(v) => setEditing({ ...editing, formality: v })}
-              />
-              <Select
-                label="Season"
-                value={editing.season ?? "all_season"}
-                options={SEASONS}
-                onChange={(v) => setEditing({ ...editing, season: v })}
-              />
-              {editing.category === "eyewear" && (
-                <label className="col-span-2 flex items-center gap-3 rounded-2xl bg-paper px-4 py-3 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={editing.is_prescription === true}
-                    onChange={(e) =>
-                      setEditing({ ...editing, is_prescription: e.target.checked })
-                    }
-                    className="h-5 w-5 accent-clay"
-                  />
-                  Prescription glasses (I need these to see)
-                </label>
-              )}
-            </div>
-            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <button
-                onClick={() => setEditing(null)}
-                disabled={saving}
-                className="btn btn-ghost"
-              >
+        <Modal
+          label="Fix this item"
+          onClose={() => setEditing(null)}
+          footer={
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button onClick={() => setEditing(null)} className="btn btn-ghost">
                 Cancel
               </button>
-              <button
-                onClick={saveEdit}
-                disabled={saving}
-                className="btn btn-primary"
-              >
-                {saving ? "Saving..." : "Save"}
+              <button onClick={saveEdit} className="btn btn-primary">
+                Save
               </button>
             </div>
+          }
+        >
+          <h3 className="mb-4 font-display text-2xl">Fix this item</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <Select
+              label="Category"
+              value={editing.category ?? "other"}
+              options={CATEGORIES}
+              onChange={(v) => setEditing({ ...editing, category: v })}
+            />
+            <label className="block text-xs text-ink/70">
+              Type (e.g. polo, shorts)
+              <input
+                value={editing.subtype ?? ""}
+                onChange={(e) =>
+                  setEditing({ ...editing, subtype: e.target.value })
+                }
+                maxLength={30}
+                className="input mt-1"
+              />
+            </label>
+            <label className="block text-xs text-ink/70">
+              Color
+              <input
+                value={editing.color ?? ""}
+                onChange={(e) =>
+                  setEditing({ ...editing, color: e.target.value })
+                }
+                maxLength={40}
+                className="input mt-1"
+              />
+            </label>
+            <Select
+              label="Pattern"
+              value={editing.pattern ?? "solid"}
+              options={PATTERNS}
+              onChange={(v) => setEditing({ ...editing, pattern: v })}
+            />
+            <Select
+              label="Formality"
+              value={editing.formality ?? "casual"}
+              options={FORMALITY}
+              onChange={(v) => setEditing({ ...editing, formality: v })}
+            />
+            <Select
+              label="Season"
+              value={editing.season ?? "all_season"}
+              options={SEASONS}
+              onChange={(v) => setEditing({ ...editing, season: v })}
+            />
+            {editing.category === "eyewear" && (
+              <label className="col-span-2 flex items-center gap-3 rounded-2xl bg-paper px-4 py-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={editing.is_prescription === true}
+                  onChange={(e) =>
+                    setEditing({ ...editing, is_prescription: e.target.checked })
+                  }
+                  className="h-5 w-5 accent-clay"
+                />
+                Prescription glasses (I need these to see)
+              </label>
+            )}
           </div>
-        </div>
+        </Modal>
       )}
     </>
   );

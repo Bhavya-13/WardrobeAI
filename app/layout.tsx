@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Fraunces } from "next/font/google";
+import { Geist, DM_Serif_Display } from "next/font/google";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -7,10 +7,11 @@ const geistSans = Geist({
   subsets: ["latin"],
 });
 
-// Elegant serif used for headings
-const fraunces = Fraunces({
-  variable: "--font-fraunces",
+// Elegant serif for headings. One light file, so pages load faster.
+const serif = DM_Serif_Display({
+  variable: "--font-serif",
   subsets: ["latin"],
+  weight: "400",
   style: ["normal", "italic"],
 });
 
@@ -33,7 +34,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${geistSans.variable} ${fraunces.variable} antialiased`}>
+      <body className={`${geistSans.variable} ${serif.variable} antialiased`}>
         {children}
       </body>
     </html>

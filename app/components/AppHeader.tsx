@@ -48,13 +48,14 @@ export default function AppHeader({
     }`;
 
   const mobileTab = (key: "closet" | "outfits") =>
-    `flex flex-1 flex-col items-center gap-1 py-2.5 text-[11px] font-medium transition ${
+    `flex flex-1 flex-col items-center gap-1 py-2.5 text-[11px] font-medium transition active:scale-95 ${
       active === key ? "text-clay" : "text-ink/50"
     }`;
 
   return (
     <>
-      <header className="sticky top-0 z-40 border-b border-line bg-cream/85 backdrop-blur">
+      {/* solid on phones (blur effects slow phones down), frosted on desktop */}
+      <header className="sticky top-0 z-40 border-b border-line bg-cream md:bg-cream/85 md:backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3 sm:px-6">
           <Link href="/closet" aria-label="Outfi home">
             <Logo />
@@ -91,7 +92,7 @@ export default function AppHeader({
       {/* phone: tab bar fixed to the bottom, like a real app */}
       <nav
         aria-label="Main"
-        className="safe-bottom fixed inset-x-0 bottom-0 z-40 flex border-t border-line bg-paper/95 backdrop-blur md:hidden"
+        className="safe-bottom fixed inset-x-0 bottom-0 z-40 flex border-t border-line bg-paper md:hidden"
       >
         <Link href="/closet" className={mobileTab("closet")}>
           <ClosetIcon />

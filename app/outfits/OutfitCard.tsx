@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { stableUrl } from "@/lib/urlCache";
 import { UNDO_MS } from "@/lib/wardrobe";
 
 export type OutfitView = {
@@ -12,7 +13,7 @@ export type OutfitView = {
   occasion: string;
   liked: boolean | null;
   worn_count: number;
-  items: { id: string; url: string; label: string }[];
+  items: { id: string; key: string; url: string; label: string }[];
 };
 
 function HeartIcon({ filled }: { filled: boolean }) {
@@ -53,9 +54,18 @@ function TrashIcon() {
 
 export default function OutfitCard({ outfit }: { outfit: OutfitView }) {
   const router = useRouter();
+  const [, startTransition] = useTransition();
   const [busy, setBusy] = useState(false);
   const [removed, setRemoved] = useState<null | "deleted" | "hidden">(null);
+  // shown straight away; the database catches up in the background
+  const [liked, setLiked] = useState<boolean | null>(outfit.liked);
+  const [worn, setWorn] = useState(outfit.worn_count);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    setLiked(outfit.liked);
+    setWorn(outfit.worn_count);
+  }, [outfit.liked, outfit.worn_count]);
 
   useEffect(() => {
     return () => {
@@ -63,40 +73,76 @@ export default function OutfitCard({ outfit }: { outfit: OutfitView }) {
     };
   }, []);
 
-  async function update(values: Record<string, unknown>) {
-    setBusy(true);
+  const refresh = () => startTransition(() => router.refresh());
+
+  // Saves a change quietly. If it fails, the card goes back to how it was.
+  async function save(values: Record<string, unknown>, revert: () => void) {
     const supabase = createClient();
-    await supabase.from("outfits").update(values).eq("id", outfit.id);
-    setBusy(false);
-    router.refresh();
+    const { error } = await supabase
+      .from("outfits")
+      .update(values)
+      .eq("id", outfit.id);
+    if (error) revert();
+    else refresh();
+  }
+
+  function toggleLike() {
+    const prev = liked;
+    const next = prev === true ? null : true;
+    setLiked(next);
+    void save({ liked: next }, () => setLiked(prev));
+  }
+
+  function wore() {
+    const prevWorn = worn;
+    const prevLiked = liked;
+    setWorn(prevWorn + 1);
+    if (prevLiked === null) setLiked(true);
+    void save(
+      {
+        worn_count: prevWorn + 1,
+        last_worn_at: new Date().toISOString(),
+        ...(prevLiked === null ? { liked: true } : {}),
+      },
+      () => {
+        setWorn(prevWorn);
+        setLiked(prevLiked);
+      }
+    );
   }
 
   // No popup: the card is hidden at once and can be brought back with Undo.
   async function removeWith(kind: "deleted" | "hidden") {
     setBusy(true);
+    setRemoved(kind);
     const supabase = createClient();
     const values =
       kind === "deleted"
         ? { deleted_at: new Date().toISOString() }
         : { hidden: true, liked: false }; // "Not for me" also teaches the AI
-    await supabase.from("outfits").update(values).eq("id", outfit.id);
+    const { error } = await supabase
+      .from("outfits")
+      .update(values)
+      .eq("id", outfit.id);
     setBusy(false);
-    setRemoved(kind);
-    timer.current = setTimeout(() => router.refresh(), UNDO_MS);
+    if (error) {
+      setRemoved(null);
+      return;
+    }
+    timer.current = setTimeout(refresh, UNDO_MS);
   }
 
   async function undo() {
     if (timer.current) clearTimeout(timer.current);
-    setBusy(true);
+    const was = removed;
+    setRemoved(null);
     const supabase = createClient();
     const values =
-      removed === "deleted"
+      was === "deleted"
         ? { deleted_at: null }
         : { hidden: false, liked: outfit.liked };
     await supabase.from("outfits").update(values).eq("id", outfit.id);
-    setBusy(false);
-    setRemoved(null);
-    router.refresh();
+    refresh();
   }
 
   if (removed) {
@@ -132,14 +178,16 @@ export default function OutfitCard({ outfit }: { outfit: OutfitView }) {
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 key={it.id}
-                src={it.url}
+                src={stableUrl(it.key, it.url)}
+                suppressHydrationWarning
                 alt={it.label}
                 title={it.label}
-                className="aspect-square w-full rounded-2xl object-cover"
+                className="aspect-square w-full rounded-2xl bg-sand/40 object-cover"
                 loading="lazy"
+                decoding="async"
               />
             ) : (
-              <div key={it.id} className="aspect-square rounded-2xl bg-sand/50" />
+              <div key={it.id} className="skeleton aspect-square rounded-2xl" />
             )
           )}
         </div>
@@ -159,12 +207,11 @@ export default function OutfitCard({ outfit }: { outfit: OutfitView }) {
 
         <div className="flex flex-wrap items-center gap-2">
           <button
-            disabled={busy}
-            onClick={() => update({ liked: outfit.liked === true ? null : true })}
-            aria-pressed={outfit.liked === true}
-            className={`btn btn-sm ${outfit.liked === true ? "btn-primary" : "btn-ghost"}`}
+            onClick={toggleLike}
+            aria-pressed={liked === true}
+            className={`btn btn-sm ${liked === true ? "btn-primary" : "btn-ghost"}`}
           >
-            <HeartIcon filled={outfit.liked === true} />
+            <HeartIcon filled={liked === true} />
             Like
           </button>
           <button
@@ -174,18 +221,8 @@ export default function OutfitCard({ outfit }: { outfit: OutfitView }) {
           >
             Not for me
           </button>
-          <button
-            disabled={busy}
-            onClick={() =>
-              update({
-                worn_count: outfit.worn_count + 1,
-                last_worn_at: new Date().toISOString(),
-                ...(outfit.liked === null ? { liked: true } : {}),
-              })
-            }
-            className="btn btn-ghost btn-sm"
-          >
-            Wore it{outfit.worn_count > 0 ? ` (${outfit.worn_count})` : ""}
+          <button onClick={wore} className="btn btn-ghost btn-sm">
+            Wore it{worn > 0 ? ` (${worn})` : ""}
           </button>
           <button
             disabled={busy}

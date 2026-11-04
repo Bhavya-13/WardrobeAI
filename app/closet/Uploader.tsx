@@ -3,29 +3,20 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { scaleToCanvas, canvasToBlob, makeThumbBlob } from "@/lib/image";
+import { HangerSpinner } from "../components/HangerLoader";
 
 const MAX_SIDE = 1280; // shrink big phone photos before uploading
 const PARALLEL_UPLOADS = 3;
 
-async function compress(file: File): Promise<Blob> {
+// One full-size copy (for the AI) and one small preview (for fast screens).
+async function prepare(file: File): Promise<{ full: Blob; thumb: Blob }> {
   const bitmap = await createImageBitmap(file);
-  const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
-  const w = Math.round(bitmap.width * scale);
-  const h = Math.round(bitmap.height * scale);
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Could not process image");
-  ctx.drawImage(bitmap, 0, 0, w, h);
+  const canvas = scaleToCanvas(bitmap, MAX_SIDE);
   bitmap.close();
-  return await new Promise<Blob>((resolve, reject) =>
-    canvas.toBlob(
-      (b) => (b ? resolve(b) : reject(new Error("Could not compress image"))),
-      "image/jpeg",
-      0.85
-    )
-  );
+  const full = await canvasToBlob(canvas, 0.85);
+  const thumb = await makeThumbBlob(canvas);
+  return { full, thumb };
 }
 
 export default function Uploader() {
@@ -68,19 +59,35 @@ export default function Uploader() {
       while (next < files.length) {
         const file = files[next++];
         try {
-          const blob = await compress(file);
-          const path = `${uid}/${crypto.randomUUID()}.jpg`;
+          const { full, thumb } = await prepare(file);
+          const id = crypto.randomUUID();
+          const path = `${uid}/${id}.jpg`;
+          const thumbPath = `${uid}/thumbs/${id}.jpg`;
 
-          const { error: upErr } = await supabase.storage
-            .from("wardrobe")
-            .upload(path, blob, { contentType: "image/jpeg" });
-          if (upErr) throw upErr;
+          const [mainUp, thumbUp] = await Promise.all([
+            supabase.storage
+              .from("wardrobe")
+              .upload(path, full, { contentType: "image/jpeg" }),
+            supabase.storage
+              .from("wardrobe")
+              .upload(thumbPath, thumb, { contentType: "image/jpeg" }),
+          ]);
+          if (mainUp.error) {
+            if (!thumbUp.error) {
+              await supabase.storage.from("wardrobe").remove([thumbPath]);
+            }
+            throw mainUp.error;
+          }
 
-          const { error: dbErr } = await supabase
-            .from("items")
-            .insert({ user_id: uid, image_path: path });
+          const { error: dbErr } = await supabase.from("items").insert({
+            user_id: uid,
+            image_path: path,
+            thumb_path: thumbUp.error ? null : thumbPath, // a missing preview is fine
+          });
           if (dbErr) {
-            await supabase.storage.from("wardrobe").remove([path]);
+            await supabase.storage
+              .from("wardrobe")
+              .remove(thumbUp.error ? [path] : [path, thumbPath]);
             throw dbErr;
           }
         } catch (e) {
@@ -117,18 +124,22 @@ export default function Uploader() {
         disabled={busy}
         className="btn btn-primary w-full sm:w-auto"
       >
-        <svg
-          width="18"
-          height="18"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          aria-hidden="true"
-        >
-          <path d="M12 5v14M5 12h14" />
-        </svg>
+        {busy ? (
+          <HangerSpinner size={20} />
+        ) : (
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            aria-hidden="true"
+          >
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        )}
         {busy
           ? `Uploading ${progress.done}/${progress.total}...`
           : "Add photos"}

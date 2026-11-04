@@ -1,10 +1,12 @@
 import { redirect } from "next/navigation";
-import { connection } from "next/server";
+import { after, connection } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/supabase/user";
 import AppHeader from "../components/AppHeader";
 import Uploader from "./Uploader";
 import SelfieExtractor from "./SelfieExtractor";
 import Tagger from "./Tagger";
+import ThumbBackfill from "./ThumbBackfill";
 import ItemGrid, { type Item } from "./ItemGrid";
 import {
   TAG_VERSION,
@@ -20,34 +22,42 @@ export const instant = false;
 export default async function ClosetPage() {
   await connection(); // this page is always rendered per request
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getSessionUser(supabase);
   if (!user) redirect("/login");
 
   // Erase items removed a couple of minutes ago for good (after the Undo window).
-  const purgeCutoff = new Date(Date.now() - PURGE_MINUTES * 60 * 1000).toISOString();
-  const { data: gone } = await supabase
-    .from("items")
-    .select("id, image_path")
-    .lt("deleted_at", purgeCutoff);
-  if (gone && gone.length > 0) {
-    await supabase.storage
-      .from("wardrobe")
-      .remove(gone.map((g) => g.image_path as string));
-    await supabase
-      .from("items")
-      .delete()
-      .in(
-        "id",
-        gone.map((g) => g.id as string)
-      );
-  }
+  // Runs AFTER the page has been sent, so it never slows the page down.
+  after(async () => {
+    try {
+      const cutoff = new Date(
+        Date.now() - PURGE_MINUTES * 60 * 1000
+      ).toISOString();
+      const { data: gone } = await supabase
+        .from("items")
+        .select("id, image_path, thumb_path")
+        .lt("deleted_at", cutoff);
+      if (gone && gone.length > 0) {
+        const paths = gone
+          .flatMap((g) => [g.image_path as string, g.thumb_path as string | null])
+          .filter((p): p is string => Boolean(p));
+        await supabase.storage.from("wardrobe").remove(paths);
+        await supabase
+          .from("items")
+          .delete()
+          .in(
+            "id",
+            gone.map((g) => g.id as string)
+          );
+      }
+    } catch {
+      // cleaning up can wait until the next visit
+    }
+  });
 
   const { data: rows } = await supabase
     .from("items")
     .select(
-      "id, image_path, category, subtype, color, pattern, formality, season, tags, tag_status, tag_claimed_at, tag_source, tag_version, tagged_at, is_prescription"
+      "id, image_path, thumb_path, category, subtype, color, pattern, formality, season, tags, tag_status, tag_claimed_at, tag_source, tag_version, tagged_at, is_prescription"
     )
     .is("deleted_at", null)
     .order("created_at", { ascending: false });
@@ -55,33 +65,44 @@ export default async function ClosetPage() {
   const items = rows ?? [];
 
   // Photos are private, so we create temporary (1 hour) viewing links.
+  // The small preview is used when there is one (much faster to load).
+  const shownPath = (i: { image_path: unknown; thumb_path: unknown }) =>
+    ((i.thumb_path as string | null) ?? (i.image_path as string)) as string;
+
   const urlByPath: Record<string, string> = {};
   if (items.length > 0) {
     const { data: signed } = await supabase.storage
       .from("wardrobe")
-      .createSignedUrls(
-        items.map((i) => i.image_path),
-        3600
-      );
+      .createSignedUrls(items.map(shownPath), 3600);
     signed?.forEach((s) => {
       if (s.path && s.signedUrl) urlByPath[s.path] = s.signedUrl;
     });
   }
 
-  const gridItems: Item[] = items.map((i) => ({
-    id: i.id as string,
-    image_path: i.image_path as string,
-    url: urlByPath[i.image_path] ?? "",
-    category: (i.category as string | null) ?? null,
-    subtype: (i.subtype as string | null) ?? null,
-    color: (i.color as string | null) ?? null,
-    pattern: (i.pattern as string | null) ?? null,
-    formality: (i.formality as string | null) ?? null,
-    season: (i.season as string | null) ?? null,
-    tags: (i.tags as string[] | null) ?? [],
-    tag_status: (i.tag_status as string | null) ?? "pending",
-    is_prescription: (i.is_prescription as boolean | null) ?? null,
-  }));
+  const gridItems: Item[] = items.map((i) => {
+    const key = shownPath(i);
+    return {
+      id: i.id as string,
+      image_path: i.image_path as string,
+      key,
+      url: urlByPath[key] ?? "",
+      category: (i.category as string | null) ?? null,
+      subtype: (i.subtype as string | null) ?? null,
+      color: (i.color as string | null) ?? null,
+      pattern: (i.pattern as string | null) ?? null,
+      formality: (i.formality as string | null) ?? null,
+      season: (i.season as string | null) ?? null,
+      tags: (i.tags as string[] | null) ?? [],
+      tag_status: (i.tag_status as string | null) ?? "pending",
+      is_prescription: (i.is_prescription as boolean | null) ?? null,
+    };
+  });
+
+  // Older items that do not have a small preview yet (made quietly in the background)
+  const backfill = items
+    .filter((i) => !i.thumb_path)
+    .slice(0, 12)
+    .map((i) => ({ id: i.id as string, image_path: i.image_path as string }));
 
   const now = Date.now();
   const claimCutoff = now - CLAIM_MINUTES * 60 * 1000;
@@ -114,7 +135,7 @@ export default async function ClosetPage() {
     .slice(0, RECHECK_BATCH)
     .map((r) => r.id as string);
 
-  const name = user.user_metadata?.full_name ?? user.email ?? "there";
+  const name = user.name ?? user.email ?? "there";
 
   return (
     <div className="min-h-screen bg-cream pb-28 text-ink md:pb-12">
@@ -133,7 +154,7 @@ export default async function ClosetPage() {
         <section className="card mb-8 p-5 sm:p-6">
           <h2 className="font-display text-xl">Add to your closet</h2>
           <p className="mb-4 mt-1 text-sm text-ink/60">
-            Upload photos of single items, or one photo of you wearing them and
+            Upload photos of single items, or photos of you wearing them and
             Outfi will pick out each piece.
           </p>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
@@ -148,6 +169,7 @@ export default async function ClosetPage() {
         </section>
 
         <ItemGrid items={gridItems} />
+        <ThumbBackfill targets={backfill} />
       </main>
     </div>
   );

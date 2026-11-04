@@ -25,16 +25,16 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Checks the signed login token locally (fast) and refreshes it when needed.
+  const { data } = await supabase.auth.getClaims();
+  const loggedIn = Boolean(data?.claims?.sub);
 
   // The landing page ("/"), login and the auth callback are open to everyone.
   const path = request.nextUrl.pathname;
   const isPublic =
     path === "/" || path.startsWith("/login") || path.startsWith("/auth");
 
-  if (!user && !isPublic) {
+  if (!loggedIn && !isPublic) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);

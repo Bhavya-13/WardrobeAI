@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/supabase/user";
 import GoogleButton from "./components/GoogleButton";
 import Logo from "./components/Logo";
 
@@ -70,11 +71,24 @@ function Tile({
   );
 }
 
+// Soft colour glow (a gradient, which is much cheaper for phones than blur)
+function Glow({ className, rgb }: { className: string; rgb: string }) {
+  return (
+    <div
+      aria-hidden="true"
+      className={`pointer-events-none absolute rounded-full ${className}`}
+      style={{
+        background: `radial-gradient(closest-side, rgba(${rgb}, 0.85), rgba(${rgb}, 0))`,
+      }}
+    />
+  );
+}
+
 const steps = [
   {
     n: "01",
     title: "Snap your closet",
-    body: "Upload photos of your clothes, or take one mirror selfie and let Outfi pick out each piece for you.",
+    body: "Upload photos of your clothes, or take a few mirror selfies and let Outfi pick out each piece for you.",
   },
   {
     n: "02",
@@ -91,7 +105,7 @@ const steps = [
 const features = [
   {
     title: "Add your closet in minutes",
-    body: "One selfie can add your top, bottom, shoes and glasses at once.",
+    body: "A few selfies can add your tops, bottoms, shoes and glasses all at once.",
   },
   {
     title: "Learns your taste",
@@ -109,22 +123,13 @@ const features = [
 
 export default async function Landing() {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getSessionUser(supabase);
   if (user) redirect("/closet");
 
   return (
     <div className="relative min-h-screen overflow-x-hidden bg-cream text-ink">
-      {/* soft colour blobs behind the hero */}
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute -left-28 -top-28 h-80 w-80 rounded-full bg-blush opacity-70 blur-3xl"
-      />
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute -right-24 top-40 h-72 w-72 rounded-full bg-sage-soft opacity-90 blur-3xl"
-      />
+      <Glow className="-left-32 -top-32 h-[26rem] w-[26rem]" rgb="240, 213, 201" />
+      <Glow className="-right-32 top-32 h-[24rem] w-[24rem]" rgb="220, 229, 219" />
 
       {/* top bar */}
       <header className="relative z-10 mx-auto flex max-w-6xl items-center justify-between px-5 py-5 sm:px-8">

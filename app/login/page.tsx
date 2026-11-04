@@ -16,11 +16,19 @@ export default async function LoginPage({
     <main className="relative grid min-h-screen place-items-center overflow-hidden bg-cream px-5 py-10 text-ink">
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute -left-24 -top-24 h-72 w-72 rounded-full bg-blush opacity-70 blur-3xl"
+        className="pointer-events-none absolute -left-24 -top-24 h-[22rem] w-[22rem] rounded-full"
+        style={{
+          background:
+            "radial-gradient(closest-side, rgba(240,213,201,0.85), rgba(240,213,201,0))",
+        }}
       />
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute -bottom-24 -right-20 h-72 w-72 rounded-full bg-sage-soft opacity-90 blur-3xl"
+        className="pointer-events-none absolute -bottom-24 -right-20 h-[22rem] w-[22rem] rounded-full"
+        style={{
+          background:
+            "radial-gradient(closest-side, rgba(220,229,219,0.9), rgba(220,229,219,0))",
+        }}
       />
 
       <div className="card fade-up relative w-full max-w-sm p-8 text-center">

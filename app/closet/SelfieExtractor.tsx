@@ -3,6 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { makeThumbBlob } from "@/lib/image";
+import Modal from "../components/Modal";
+import { HangerSpinner } from "../components/HangerLoader";
 import {
   DEFAULT_MARGIN,
   EYEWEAR_MIN_MARGIN,
@@ -14,6 +17,7 @@ const MAX_PHOTOS = 10; // photos per batch (keeps phones from running out of mem
 const PREVIEW_SIDE = 1000; // size kept in memory for the review screen
 const DETECT_SIDE = 1280; // size sent to the AI
 const FINAL_SIDE = 2400; // size used for the final crops
+const PREVIEW_CROP = 420; // size of the little crops shown while reviewing
 const PARALLEL = 2; // photos analysed at the same time
 
 type Box = [number, number, number, number];
@@ -207,10 +211,12 @@ function makeThumb(src: HTMLCanvasElement): string {
 }
 
 // Cuts one item out of a photo, with a margin around the box.
+// maxOut limits the size of the result (small for previews, large for saving).
 function cropFrom(
   hi: HTMLCanvasElement,
   d: { label: string; box: Box },
-  margin: number
+  margin: number,
+  maxOut = 1024
 ): HTMLCanvasElement {
   const W = hi.width;
   const H = hi.height;
@@ -229,7 +235,7 @@ function cropFrom(
   const sw = Math.max(1, ex - sx);
   const sh = Math.max(1, ey - sy);
 
-  const scale = Math.min(1, 1024 / Math.max(sw, sh)); // only ever shrink
+  const scale = Math.min(1, maxOut / Math.max(sw, sh)); // only ever shrink
   const c = document.createElement("canvas");
   c.width = Math.max(1, Math.round(sw * scale));
   c.height = Math.max(1, Math.round(sh * scale));
@@ -340,15 +346,24 @@ export default function SelfieExtractor() {
 
   const itemsKey = items.map((i) => i.id).join(",");
 
-  // Re-draw the preview crops whenever the margin slider moves.
+  // Re-draw the little preview crops when the margin slider moves.
+  // Waits a moment and draws small pictures, so dragging the slider stays smooth.
   useEffect(() => {
     if (step !== "review") return;
-    const next: Record<string, string> = {};
-    for (const it of items) {
-      const canvas = canvasesRef.current[it.photoId];
-      if (canvas) next[it.id] = cropFrom(canvas, it, margin).toDataURL("image/jpeg", 0.8);
-    }
-    setPreviews(next);
+    const t = setTimeout(() => {
+      const next: Record<string, string> = {};
+      for (const it of items) {
+        const canvas = canvasesRef.current[it.photoId];
+        if (canvas) {
+          next[it.id] = cropFrom(canvas, it, margin, PREVIEW_CROP).toDataURL(
+            "image/jpeg",
+            0.7
+          );
+        }
+      }
+      setPreviews(next);
+    }, 120);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [itemsKey, margin, step]);
 
@@ -550,18 +565,34 @@ export default function SelfieExtractor() {
 
       for (const it of list) {
         try {
-          const blob = await toBlob(cropFrom(hi, it, margin), 0.9);
-          const path = `${user.id}/${crypto.randomUUID()}.jpg`;
-          const { error: upErr } = await supabase.storage
-            .from("wardrobe")
-            .upload(path, blob, { contentType: "image/jpeg" });
-          if (upErr) throw upErr;
+          const crop = cropFrom(hi, it, margin);
+          const blob = await toBlob(crop, 0.9);
+          const thumb = await makeThumbBlob(crop);
+          const id = crypto.randomUUID();
+          const path = `${user.id}/${id}.jpg`;
+          const thumbPath = `${user.id}/thumbs/${id}.jpg`;
+
+          const [mainUp, thumbUp] = await Promise.all([
+            supabase.storage
+              .from("wardrobe")
+              .upload(path, blob, { contentType: "image/jpeg" }),
+            supabase.storage
+              .from("wardrobe")
+              .upload(thumbPath, thumb, { contentType: "image/jpeg" }),
+          ]);
+          if (mainUp.error) {
+            if (!thumbUp.error) {
+              await supabase.storage.from("wardrobe").remove([thumbPath]);
+            }
+            throw mainUp.error;
+          }
 
           // If the AI already labelled the item, save the labels now. No second
           // AI request is needed. Otherwise it simply joins the tagging queue.
           const row: Record<string, unknown> = {
             user_id: user.id,
             image_path: path,
+            thumb_path: thumbUp.error ? null : thumbPath,
             category: it.label,
           };
           if (it.labels) {
@@ -583,7 +614,9 @@ export default function SelfieExtractor() {
 
           const { error: dbErr } = await supabase.from("items").insert(row);
           if (dbErr) {
-            await supabase.storage.from("wardrobe").remove([path]);
+            await supabase.storage
+              .from("wardrobe")
+              .remove(thumbUp.error ? [path] : [path, thumbPath]);
             throw dbErr;
           }
           added++;
@@ -644,36 +677,50 @@ export default function SelfieExtractor() {
         disabled={step !== "idle"}
         className="btn btn-ghost w-full sm:w-auto"
       >
-        <svg
-          width="18"
-          height="18"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M4 8h3l1.5-2h7L17 8h3v11H4z" />
-          <circle cx="12" cy="13" r="3.2" />
-        </svg>
-        {step === "detecting"
-          ? `Analysing photo ${Math.min(progress.done + 1, progress.total)} of ${progress.total}...`
-          : "Add from a photo of me"}
+        {step === "detecting" ? (
+          <HangerSpinner size={20} className="text-clay" />
+        ) : (
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M4 8h3l1.5-2h7L17 8h3v11H4z" />
+            <circle cx="12" cy="13" r="3.2" />
+          </svg>
+        )}
+        {step === "detecting" ? "Analysing..." : "Add from a photo of me"}
       </button>
 
       {step === "detecting" && (
-        <div
-          className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-sand sm:w-72"
-          aria-hidden="true"
-        >
-          <div
-            className="h-full rounded-full bg-clay transition-all"
-            style={{
-              width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%`,
-            }}
-          />
+        <div className="mt-4 flex items-center gap-4 rounded-2xl bg-paper p-4 shadow-soft sm:max-w-sm">
+          <HangerSpinner size={38} className="shrink-0 text-clay" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">
+              Reading your {progress.total === 1 ? "photo" : "photos"}...
+            </p>
+            <p className="text-xs text-ink/55">
+              Photo {Math.min(progress.done + 1, progress.total)} of{" "}
+              {progress.total}
+            </p>
+            <div
+              className="mt-2 h-1.5 overflow-hidden rounded-full bg-sand"
+              aria-hidden="true"
+            >
+              <div
+                className="h-full rounded-full bg-clay transition-all"
+                style={{
+                  width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%`,
+                }}
+              />
+            </div>
+          </div>
         </div>
       )}
 
@@ -699,160 +746,13 @@ export default function SelfieExtractor() {
         </div>
       )}
 
+      {/* Drawn directly on the screen, so it is always where you are looking */}
       {(step === "review" || step === "saving") && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 sm:items-center sm:p-4">
-          <div className="sheet max-h-[92vh] w-full max-w-2xl overflow-y-auto overscroll-contain rounded-t-3xl bg-cream px-5 pt-5 shadow-xl sm:rounded-3xl sm:px-6 sm:pt-6">
-            <h3 className="font-display text-2xl">
-              Found in your {photos.length === 1 ? "photo" : "photos"}
-            </h3>
-            <p className="mb-3 mt-1 text-sm text-ink/60">
-              {items.length} {items.length === 1 ? "item" : "items"} from{" "}
-              {photos.length} {photos.length === 1 ? "photo" : "photos"}, already
-              labelled. Tap an item to untick it. Your photos are not saved,
-              only the items you add.
-              {photos.length > 1 &&
-                " Same piece in several photos? Untick the repeats."}
-            </p>
-
-            {notes.length > 0 && (
-              <ul className="mb-3 space-y-1 rounded-2xl bg-sand/60 px-4 py-3 text-xs text-ink/75">
-                {notes.map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
-              </ul>
-            )}
-
-            <FailureList
-              failures={failures}
-              busy={working}
-              onRetry={retryFailed}
-              onDismiss={() => setFailures([])}
-            />
-
-            <label className="mb-5 block text-xs text-ink/70">
-              Space around each item: {Math.round(margin * 100)}%
-              <input
-                type="range"
-                min={0}
-                max={40}
-                step={2}
-                value={Math.round(margin * 100)}
-                onChange={(e) => setMargin(Number(e.target.value) / 100)}
-                disabled={busy}
-                className="mt-2 w-full accent-clay"
-              />
-            </label>
-
-            {photos.map((photo, pi) => {
-              const mine = items.filter((i) => i.photoId === photo.id);
-              const allOn = mine.every((i) => i.selected);
-              return (
-                <section key={photo.id} className="mb-6">
-                  <div className="mb-2 flex items-center gap-3">
-                    {photo.thumb && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={photo.thumb}
-                        alt=""
-                        className="h-12 w-12 shrink-0 rounded-xl object-cover"
-                      />
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">
-                        Photo {pi + 1}
-                      </p>
-                      <p className="truncate text-xs text-ink/50">
-                        {mine.length} {mine.length === 1 ? "item" : "items"} found
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => togglePhoto(photo.id)}
-                      disabled={busy}
-                      className="btn btn-ghost btn-sm"
-                    >
-                      {allOn ? "Untick all" : "Tick all"}
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                    {mine.map((it) => {
-                      const lb = it.labels;
-                      const title = lb
-                        ? pretty(
-                            `${lb.color && lb.color !== "unknown" ? lb.color + " " : ""}${lb.subtype ?? lb.category}`
-                          )
-                        : pretty(it.label);
-                      return (
-                        <button
-                          key={it.id}
-                          disabled={busy}
-                          onClick={() =>
-                            setItems(
-                              items.map((x) =>
-                                x.id === it.id ? { ...x, selected: !x.selected } : x
-                              )
-                            )
-                          }
-                          aria-pressed={it.selected}
-                          className={`relative overflow-hidden rounded-2xl bg-paper text-left shadow-soft ring-2 transition ${
-                            it.selected ? "ring-clay" : "opacity-50 ring-transparent"
-                          }`}
-                        >
-                          {previews[it.id] ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={previews[it.id]}
-                              alt={it.note || it.label}
-                              className="aspect-square w-full bg-sand/50 object-contain"
-                            />
-                          ) : (
-                            <div className="aspect-square w-full bg-sand/50" />
-                          )}
-                          <span
-                            className={`absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full border text-cream ${
-                              it.selected
-                                ? "border-clay bg-clay"
-                                : "border-ink/30 bg-paper"
-                            }`}
-                          >
-                            {it.selected && (
-                              <svg
-                                width="14"
-                                height="14"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="3"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                aria-hidden="true"
-                              >
-                                <path d="M5 12.5l4.5 4.5L19 7.5" />
-                              </svg>
-                            )}
-                          </span>
-                          <div className="px-3 py-2">
-                            <p className="truncate text-xs font-medium capitalize">
-                              {title}
-                            </p>
-                            <p className="truncate text-[11px] capitalize text-ink/55">
-                              {lb
-                                ? `${pretty(lb.category)} / ${pretty(lb.formality)}`
-                                : it.note}
-                            </p>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </section>
-              );
-            })}
-
-            {error && <p className="mb-3 text-sm text-red-700">{error}</p>}
-
-            {/* stays visible at the bottom while you scroll through many items */}
-            <div className="sticky bottom-0 -mx-5 flex flex-col-reverse gap-2 border-t border-line bg-cream px-5 py-3 sm:-mx-6 sm:flex-row sm:justify-end sm:px-6">
+        <Modal
+          label="Items found in your photos"
+          maxWidth="max-w-2xl"
+          footer={
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <button onClick={cancel} disabled={busy} className="btn btn-ghost">
                 Cancel
               </button>
@@ -861,13 +761,161 @@ export default function SelfieExtractor() {
                 disabled={busy || selectedCount === 0}
                 className="btn btn-primary"
               >
+                {busy && <HangerSpinner size={18} />}
                 {busy
                   ? `Adding ${progress.done}/${progress.total}...`
                   : `Add ${selectedCount} ${selectedCount === 1 ? "item" : "items"}`}
               </button>
             </div>
-          </div>
-        </div>
+          }
+        >
+          <h3 className="font-display text-2xl">
+            Found in your {photos.length === 1 ? "photo" : "photos"}
+          </h3>
+          <p className="mb-3 mt-1 text-sm text-ink/60">
+            {items.length} {items.length === 1 ? "item" : "items"} from{" "}
+            {photos.length} {photos.length === 1 ? "photo" : "photos"}, already
+            labelled. Tap an item to untick it. Your photos are not saved, only
+            the items you add.
+            {photos.length > 1 &&
+              " Same piece in several photos? Untick the repeats."}
+          </p>
+
+          {notes.length > 0 && (
+            <ul className="mb-3 space-y-1 rounded-2xl bg-sand/60 px-4 py-3 text-xs text-ink/75">
+              {notes.map((s, i) => (
+                <li key={i}>{s}</li>
+              ))}
+            </ul>
+          )}
+
+          <FailureList
+            failures={failures}
+            busy={working}
+            onRetry={retryFailed}
+            onDismiss={() => setFailures([])}
+          />
+
+          <label className="mb-5 block text-xs text-ink/70">
+            Space around each item: {Math.round(margin * 100)}%
+            <input
+              type="range"
+              min={0}
+              max={40}
+              step={2}
+              value={Math.round(margin * 100)}
+              onChange={(e) => setMargin(Number(e.target.value) / 100)}
+              disabled={busy}
+              className="mt-2 w-full accent-clay"
+            />
+          </label>
+
+          {photos.map((photo, pi) => {
+            const mine = items.filter((i) => i.photoId === photo.id);
+            const allOn = mine.every((i) => i.selected);
+            return (
+              <section key={photo.id} className="mb-6">
+                <div className="mb-2 flex items-center gap-3">
+                  {photo.thumb && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={photo.thumb}
+                      alt=""
+                      className="h-12 w-12 shrink-0 rounded-xl object-cover"
+                    />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">Photo {pi + 1}</p>
+                    <p className="truncate text-xs text-ink/50">
+                      {mine.length} {mine.length === 1 ? "item" : "items"} found
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => togglePhoto(photo.id)}
+                    disabled={busy}
+                    className="btn btn-ghost btn-sm"
+                  >
+                    {allOn ? "Untick all" : "Tick all"}
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  {mine.map((it) => {
+                    const lb = it.labels;
+                    const title = lb
+                      ? pretty(
+                          `${lb.color && lb.color !== "unknown" ? lb.color + " " : ""}${lb.subtype ?? lb.category}`
+                        )
+                      : pretty(it.label);
+                    return (
+                      <button
+                        key={it.id}
+                        disabled={busy}
+                        onClick={() =>
+                          setItems(
+                            items.map((x) =>
+                              x.id === it.id ? { ...x, selected: !x.selected } : x
+                            )
+                          )
+                        }
+                        aria-pressed={it.selected}
+                        className={`relative overflow-hidden rounded-2xl bg-paper text-left shadow-soft ring-2 transition ${
+                          it.selected ? "ring-clay" : "opacity-50 ring-transparent"
+                        }`}
+                      >
+                        {previews[it.id] ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={previews[it.id]}
+                            alt={it.note || it.label}
+                            className="aspect-square w-full bg-sand/50 object-contain"
+                          />
+                        ) : (
+                          <div className="skeleton aspect-square w-full" />
+                        )}
+                        <span
+                          className={`absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full border text-cream ${
+                            it.selected
+                              ? "border-clay bg-clay"
+                              : "border-ink/30 bg-paper"
+                          }`}
+                        >
+                          {it.selected && (
+                            <svg
+                              width="14"
+                              height="14"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="3"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              aria-hidden="true"
+                            >
+                              <path d="M5 12.5l4.5 4.5L19 7.5" />
+                            </svg>
+                          )}
+                        </span>
+                        <div className="px-3 py-2">
+                          <p className="truncate text-xs font-medium capitalize">
+                            {title}
+                          </p>
+                          <p className="truncate text-[11px] capitalize text-ink/55">
+                            {lb
+                              ? `${pretty(lb.category)} / ${pretty(lb.formality)}`
+                              : it.note}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            );
+          })}
+
+          {error && <p className="mb-3 text-sm text-red-700">{error}</p>}
+        </Modal>
       )}
     </div>
   );
