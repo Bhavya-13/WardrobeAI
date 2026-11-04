@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import AppHeader from "../components/AppHeader";
 import Uploader from "./Uploader";
 import Tagger from "./Tagger";
 import ItemGrid, { type Item } from "./ItemGrid";
@@ -17,7 +18,7 @@ export default async function ClosetPage() {
   const { data: rows } = await supabase
     .from("items")
     .select(
-      "id, image_path, category, color, pattern, formality, season, tags, tag_status"
+      "id, image_path, category, subtype, color, pattern, formality, season, tags, tag_status"
     )
     .order("created_at", { ascending: false });
 
@@ -42,6 +43,7 @@ export default async function ClosetPage() {
     image_path: i.image_path as string,
     url: urlByPath[i.image_path] ?? "",
     category: (i.category as string | null) ?? null,
+    subtype: (i.subtype as string | null) ?? null,
     color: (i.color as string | null) ?? null,
     pattern: (i.pattern as string | null) ?? null,
     formality: (i.formality as string | null) ?? null,
@@ -57,35 +59,19 @@ export default async function ClosetPage() {
     .filter((i) => i.tag_status === "failed")
     .map((i) => i.id);
 
-  async function signOut() {
-    "use server";
-    const supabase = await createClient();
-    await supabase.auth.signOut();
-    redirect("/login");
-  }
-
-  const name = user.user_metadata?.full_name ?? user.email;
+  const name = user.user_metadata?.full_name ?? user.email ?? "there";
 
   return (
     <main className="min-h-screen bg-[#F6F1EA] px-5 py-8 text-[#1F1F1F]">
       <div className="mx-auto max-w-5xl">
-        <header className="mb-8 flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Outfi</h1>
-            <p className="text-sm text-[#1F1F1F]/60">Hi, {name}</p>
-          </div>
-          <form action={signOut}>
-            <button className="rounded-xl border border-[#1F1F1F] px-4 py-2 text-sm transition hover:bg-[#1F1F1F] hover:text-white">
-              Sign out
-            </button>
-          </form>
-        </header>
+        <AppHeader name={name} active="closet" />
 
         <section className="mb-8">
           <h2 className="mb-1 text-xl font-semibold">Your closet</h2>
           <p className="mb-4 text-sm text-[#1F1F1F]/60">
             {gridItems.length} {gridItems.length === 1 ? "item" : "items"}. Add
-            photos of your clothes, one item per photo works best.
+            photos of your clothes, one item per photo works best. Tap
+            &quot;Edit&quot; on a card to fix a wrong label.
           </p>
           <Uploader />
           <Tagger pendingIds={pendingIds} failedIds={failedIds} />
