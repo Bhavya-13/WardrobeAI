@@ -6,8 +6,11 @@ import {
   describeItem,
   type CatalogItem,
 } from "@/lib/outfits";
+import type { GlassesMode } from "@/lib/wardrobe";
 
 export const maxDuration = 60;
+
+const MODES = ["always", "sometimes", "never"];
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -18,7 +21,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Not logged in" }, { status: 401 });
   }
 
-  let body: { occasion?: string; note?: string; count?: number } = {};
+  let body: { occasion?: string; note?: string; count?: number; glasses?: string } =
+    {};
   try {
     body = await request.json();
   } catch {}
@@ -27,11 +31,27 @@ export async function POST(request: Request) {
   const note = String(body.note ?? "").trim().slice(0, 200);
   const count = Math.min(5, Math.max(1, Number(body.count) || 3));
 
+  // Glasses setting: this request's choice, else the saved profile, else "sometimes"
+  let glassesMode: GlassesMode = "sometimes";
+  if (body.glasses && MODES.includes(body.glasses)) {
+    glassesMode = body.glasses as GlassesMode;
+  } else {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("glasses_mode")
+      .maybeSingle();
+    const saved = profile?.glasses_mode as string | undefined;
+    if (saved && MODES.includes(saved)) glassesMode = saved as GlassesMode;
+  }
+
   // 1) The user's tagged wardrobe (Row Level Security limits this to their items)
   const { data: rows, error: itemsErr } = await supabase
     .from("items")
-    .select("id, category, subtype, color, pattern, formality, season, tags")
+    .select(
+      "id, category, subtype, color, pattern, formality, season, tags, is_prescription"
+    )
     .eq("tag_status", "done")
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
     .limit(150);
   if (itemsErr) {
@@ -47,6 +67,7 @@ export async function POST(request: Request) {
     formality: (r.formality as string | null) ?? null,
     season: (r.season as string | null) ?? null,
     tags: (r.tags as string[] | null) ?? [],
+    is_prescription: (r.is_prescription as boolean | null) ?? null,
   }));
 
   const has = (c: string) => items.some((i) => i.category === c);
@@ -60,10 +81,18 @@ export async function POST(request: Request) {
     );
   }
 
+  const hasRx = items.some((i) => i.category === "eyewear" && i.is_prescription === true);
+  const warning =
+    glassesMode === "always" && !hasRx
+      ? "Glasses are set to Always, but none of your eyewear is marked as prescription. Open Closet, tap Edit on your glasses and tick Prescription."
+      : null;
+
   // 2) What the user liked, disliked and wore recently
+  // (hidden "Not for me" outfits still count as a dislike; deleted ones do not)
   const { data: past } = await supabase
     .from("outfits")
     .select("item_ids, liked, last_worn_at")
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
     .limit(40);
 
@@ -99,6 +128,7 @@ export async function POST(request: Request) {
       occasion,
       note,
       count,
+      glassesMode,
       history: { liked, disliked, recentIds: Array.from(recentIds) },
     });
 
@@ -122,7 +152,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: insErr.message }, { status: 500 });
     }
 
-    return NextResponse.json({ ok: true, created: drafts.length });
+    return NextResponse.json({ ok: true, created: drafts.length, warning });
   } catch (e) {
     if (e instanceof GeminiError) {
       if (e.status === 429 || e.status === 500 || e.status === 503) {

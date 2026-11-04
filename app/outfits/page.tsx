@@ -2,8 +2,9 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import AppHeader from "../components/AppHeader";
 import OutfitGenerator from "./OutfitGenerator";
+import OutfitToolbar from "./OutfitToolbar";
 import OutfitCard, { type OutfitView } from "./OutfitCard";
-import { CATEGORY_ORDER, pretty } from "@/lib/wardrobe";
+import { CATEGORY_ORDER, pretty, type GlassesMode } from "@/lib/wardrobe";
 
 // Per-user page (reads the login cookie), so it renders on every request.
 export const instant = false;
@@ -15,14 +16,27 @@ export default async function OutfitsPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
+  // Saved glasses setting
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("glasses_mode")
+    .maybeSingle();
+  const savedMode = profile?.glasses_mode as string | undefined;
+  const glassesMode: GlassesMode =
+    savedMode === "always" || savedMode === "never" ? savedMode : "sometimes";
+
   // Closet stats, used for helpful hints
   const { data: stats } = await supabase
     .from("items")
-    .select("category, tag_status");
+    .select("category, tag_status, is_prescription")
+    .is("deleted_at", null);
   const all = stats ?? [];
   const done = all.filter((s) => s.tag_status === "done");
   const countCat = (c: string) => done.filter((s) => s.category === c).length;
   const pending = all.length - done.length;
+  const rxCount = done.filter(
+    (s) => s.category === "eyewear" && s.is_prescription === true
+  ).length;
 
   const hints: string[] = [];
   if (all.length === 0) hints.push("Your closet is empty. Add photos in Closet first.");
@@ -36,11 +50,17 @@ export default async function OutfitsPage() {
     hints.push("No tops yet. Outfits need a top and a bottom (or a one-piece).");
   if (done.length > 0 && countCat("bottom") + countCat("one_piece") === 0)
     hints.push("No bottoms yet. Outfits need a top and a bottom (or a one-piece).");
+  if (glassesMode === "always" && rxCount === 0)
+    hints.push(
+      "Glasses are set to Always, but no prescription pair is marked. In Closet, tap Edit on your glasses, set the category to Eyewear and tick Prescription."
+    );
 
-  // Saved outfits
+  // Saved outfits (hidden and deleted ones are not shown)
   const { data: outfitRows } = await supabase
     .from("outfits")
     .select("id, occasion, name, reason, item_ids, liked, worn_count")
+    .eq("hidden", false)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
     .limit(24);
   const outfits = outfitRows ?? [];
@@ -63,6 +83,7 @@ export default async function OutfitsPage() {
     const { data: itemRows } = await supabase
       .from("items")
       .select("id, image_path, category, subtype, color")
+      .is("deleted_at", null)
       .in("id", itemIds);
     (itemRows ?? []).forEach((r) => itemById.set(r.id as string, r as ItemInfo));
 
@@ -107,6 +128,7 @@ export default async function OutfitsPage() {
     };
   });
 
+  const notLikedIds = views.filter((v) => v.liked !== true).map((v) => v.id);
   const name = user.user_metadata?.full_name ?? user.email ?? "there";
 
   return (
@@ -114,7 +136,7 @@ export default async function OutfitsPage() {
       <div className="mx-auto max-w-5xl">
         <AppHeader name={name} active="outfits" />
 
-        <OutfitGenerator />
+        <OutfitGenerator initialGlasses={glassesMode} />
 
         {hints.length > 0 && (
           <ul className="mt-4 space-y-1 rounded-xl bg-white/60 p-4 text-sm text-[#1F1F1F]/70">
@@ -124,7 +146,8 @@ export default async function OutfitsPage() {
           </ul>
         )}
 
-        <h2 className="mb-4 mt-8 text-xl font-semibold">Your outfits</h2>
+        <h2 className="mb-3 mt-8 text-xl font-semibold">Your outfits</h2>
+        <OutfitToolbar ids={notLikedIds} />
         {views.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-[#1F1F1F]/30 p-10 text-center text-[#1F1F1F]/60">
             No outfits yet. Pick an occasion above and tap &quot;Make 3 outfits&quot;.

@@ -74,18 +74,20 @@ export type ClothingTags = {
   formality: string;
   season: string;
   tags: string[];
+  is_prescription: boolean | null;
 };
 
 const TAG_PROMPT = `You are a fashion expert cataloguing a personal wardrobe.
-The photo shows ONE clothing item or accessory (it may be on a bed, hanger, floor or a person). Describe only the main item.
+The photo shows ONE clothing item or accessory (it may be on a bed, hanger, floor or a person, or be a loose crop from a larger photo). Describe only the main item.
 Rules:
-- category: top (shirts, tees, polos, kurtas, sweaters), bottom (jeans, trousers, skirts, shorts), one_piece (dresses, sarees, jumpsuits), outerwear (jackets, coats, blazers, hoodies), footwear, bag, accessory (watch, belt, scarf, jewellery, cap), or other.
-- subtype: the specific garment type in 1-2 lowercase words, e.g. t-shirt, polo, shirt, kurta, jeans, chinos, shorts, joggers, sneakers, sandals, jacket, hoodie. Be careful to tell shorts apart from long trousers.
-- color: the main color in 1-2 plain words, e.g. "navy blue", "off white", "olive green".
+- category: top (shirts, tees, polos, kurtas, sweaters), bottom (jeans, trousers, skirts, shorts), one_piece (dresses, sarees, jumpsuits), outerwear (jackets, coats, blazers, hoodies), footwear, eyewear (glasses and sunglasses), bag, accessory (watch, belt, scarf, jewellery, cap), or other.
+- subtype: the specific garment type in 1-2 lowercase words, e.g. t-shirt, polo, shirt, kurta, jeans, chinos, shorts, joggers, sneakers, sandals, jacket, hoodie, glasses, sunglasses. Be careful to tell shorts apart from long trousers.
+- color: the main color in 1-2 plain words, e.g. "navy blue", "off white", "olive green". For eyewear use the frame color.
 - pattern: the visible pattern.
 - formality: how dressy it is. Use "traditional" for ethnic or festive Indian wear.
 - season: when it is best worn.
-- tags: 3 to 6 short lowercase words describing the type and style, e.g. ["oversized", "cotton", "streetwear"].`;
+- tags: 3 to 6 short lowercase words describing the type and style, e.g. ["oversized", "cotton", "streetwear"].
+- is_prescription: only for eyewear. true if it looks like clear-lens prescription glasses, false if the lenses are dark or tinted (sunglasses). For anything that is not eyewear, return false.`;
 
 const TAG_SCHEMA = {
   type: "OBJECT",
@@ -97,8 +99,18 @@ const TAG_SCHEMA = {
     formality: { type: "STRING", enum: [...FORMALITY] },
     season: { type: "STRING", enum: [...SEASONS] },
     tags: { type: "ARRAY", items: { type: "STRING" } },
+    is_prescription: { type: "BOOLEAN" },
   },
-  required: ["category", "subtype", "color", "pattern", "formality", "season", "tags"],
+  required: [
+    "category",
+    "subtype",
+    "color",
+    "pattern",
+    "formality",
+    "season",
+    "tags",
+    "is_prescription",
+  ],
   propertyOrdering: [
     "category",
     "subtype",
@@ -107,6 +119,7 @@ const TAG_SCHEMA = {
     "formality",
     "season",
     "tags",
+    "is_prescription",
   ],
 };
 
@@ -130,14 +143,16 @@ function normalize(raw: Record<string, unknown>): ClothingTags {
         .slice(0, 6)
     : [];
   const subtype = String(raw.subtype ?? "").toLowerCase().trim().slice(0, 30);
+  const category = pick(raw.category, CATEGORIES, "other");
   return {
-    category: pick(raw.category, CATEGORIES, "other"),
+    category,
     subtype: subtype || null,
     color: String(raw.color ?? "").toLowerCase().trim().slice(0, 40) || "unknown",
     pattern: pick(raw.pattern, PATTERNS, "other"),
     formality: pick(raw.formality, FORMALITY, "casual"),
     season: pick(raw.season, SEASONS, "all_season"),
     tags,
+    is_prescription: category === "eyewear" ? raw.is_prescription === true : null,
   };
 }
 

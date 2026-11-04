@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -8,6 +8,7 @@ import {
   PATTERNS,
   FORMALITY,
   SEASONS,
+  UNDO_MS,
   pretty,
 } from "@/lib/wardrobe";
 
@@ -23,6 +24,7 @@ export type Item = {
   season: string | null;
   tags: string[];
   tag_status: string;
+  is_prescription: boolean | null;
 };
 
 function Select({
@@ -56,17 +58,32 @@ function Select({
 
 export default function ItemGrid({ items }: { items: Item[] }) {
   const router = useRouter();
-  const [removing, setRemoving] = useState<string | null>(null);
+  const [removed, setRemoved] = useState<Record<string, boolean>>({});
   const [editing, setEditing] = useState<Item | null>(null);
   const [saving, setSaving] = useState(false);
+  const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
+  useEffect(() => {
+    const t = timers.current;
+    return () => Object.values(t).forEach(clearTimeout);
+  }, []);
+
+  // No popup: the item is hidden at once and can be brought back with Undo.
   async function remove(item: Item) {
-    if (!confirm("Remove this item from your closet?")) return;
-    setRemoving(item.id);
     const supabase = createClient();
-    await supabase.storage.from("wardrobe").remove([item.image_path]);
-    await supabase.from("items").delete().eq("id", item.id);
-    setRemoving(null);
+    await supabase
+      .from("items")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", item.id);
+    setRemoved((r) => ({ ...r, [item.id]: true }));
+    timers.current[item.id] = setTimeout(() => router.refresh(), UNDO_MS);
+  }
+
+  async function undo(item: Item) {
+    clearTimeout(timers.current[item.id]);
+    const supabase = createClient();
+    await supabase.from("items").update({ deleted_at: null }).eq("id", item.id);
+    setRemoved((r) => ({ ...r, [item.id]: false }));
     router.refresh();
   }
 
@@ -83,6 +100,8 @@ export default function ItemGrid({ items }: { items: Item[] }) {
         pattern: editing.pattern,
         formality: editing.formality,
         season: editing.season,
+        is_prescription:
+          editing.category === "eyewear" ? editing.is_prescription === true : null,
         tag_status: "done",
         tag_source: "user", // AI re-checks never overwrite your fixes
         tag_claimed_at: null,
@@ -97,7 +116,7 @@ export default function ItemGrid({ items }: { items: Item[] }) {
     return (
       <div className="rounded-2xl border border-dashed border-[#1F1F1F]/30 p-10 text-center text-[#1F1F1F]/60">
         Your closet is empty. Tap &quot;Add photos&quot; to upload your first
-        items.
+        items, or &quot;Add from a photo of me&quot;.
       </div>
     );
   }
@@ -106,6 +125,23 @@ export default function ItemGrid({ items }: { items: Item[] }) {
     <>
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
         {items.map((item) => {
+          if (removed[item.id]) {
+            return (
+              <div
+                key={item.id}
+                className="flex aspect-square flex-col items-center justify-center gap-2 rounded-2xl bg-white/70 p-3 text-center text-xs"
+              >
+                <span>Item removed</span>
+                <button
+                  onClick={() => undo(item)}
+                  className="rounded-lg border border-[#1F1F1F] px-3 py-1 transition hover:bg-[#1F1F1F] hover:text-white"
+                >
+                  Undo
+                </button>
+              </div>
+            );
+          }
+
           const done = item.tag_status === "done";
           const title = done
             ? pretty(
@@ -120,6 +156,9 @@ export default function ItemGrid({ items }: { items: Item[] }) {
                 new Set(
                   [
                     item.category,
+                    item.category === "eyewear" && item.is_prescription
+                      ? "prescription"
+                      : null,
                     item.pattern && item.pattern !== "solid" ? item.pattern : null,
                     item.formality,
                     item.season,
@@ -171,10 +210,9 @@ export default function ItemGrid({ items }: { items: Item[] }) {
                   </button>
                   <button
                     onClick={() => remove(item)}
-                    disabled={removing === item.id}
-                    className="text-red-700 hover:underline disabled:opacity-50"
+                    className="text-red-700 hover:underline"
                   >
-                    {removing === item.id ? "Removing..." : "Remove"}
+                    Remove
                   </button>
                 </div>
               </div>
@@ -240,6 +278,18 @@ export default function ItemGrid({ items }: { items: Item[] }) {
                 options={SEASONS}
                 onChange={(v) => setEditing({ ...editing, season: v })}
               />
+              {editing.category === "eyewear" && (
+                <label className="col-span-2 flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={editing.is_prescription === true}
+                    onChange={(e) =>
+                      setEditing({ ...editing, is_prescription: e.target.checked })
+                    }
+                  />
+                  Prescription glasses (I need these to see)
+                </label>
+              )}
             </div>
             <div className="mt-5 flex justify-end gap-2">
               <button
