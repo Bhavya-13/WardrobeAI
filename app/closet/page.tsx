@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import Uploader from "./Uploader";
-import ItemGrid from "./ItemGrid";
+import Tagger from "./Tagger";
+import ItemGrid, { type Item } from "./ItemGrid";
 
 // Per-user page (reads the login cookie), so it renders on every request.
 export const instant = false;
@@ -15,7 +16,9 @@ export default async function ClosetPage() {
 
   const { data: rows } = await supabase
     .from("items")
-    .select("id, image_path, category, color")
+    .select(
+      "id, image_path, category, color, pattern, formality, season, tags, tag_status"
+    )
     .order("created_at", { ascending: false });
 
   const items = rows ?? [];
@@ -34,13 +37,25 @@ export default async function ClosetPage() {
     });
   }
 
-  const gridItems = items.map((i) => ({
+  const gridItems: Item[] = items.map((i) => ({
     id: i.id as string,
     image_path: i.image_path as string,
     url: urlByPath[i.image_path] ?? "",
     category: (i.category as string | null) ?? null,
     color: (i.color as string | null) ?? null,
+    pattern: (i.pattern as string | null) ?? null,
+    formality: (i.formality as string | null) ?? null,
+    season: (i.season as string | null) ?? null,
+    tags: (i.tags as string[] | null) ?? [],
+    tag_status: (i.tag_status as string | null) ?? "pending",
   }));
+
+  const pendingIds = gridItems
+    .filter((i) => i.tag_status === "pending")
+    .map((i) => i.id);
+  const failedIds = gridItems
+    .filter((i) => i.tag_status === "failed")
+    .map((i) => i.id);
 
   async function signOut() {
     "use server";
@@ -73,6 +88,7 @@ export default async function ClosetPage() {
             photos of your clothes, one item per photo works best.
           </p>
           <Uploader />
+          <Tagger pendingIds={pendingIds} failedIds={failedIds} />
         </section>
 
         <ItemGrid items={gridItems} />
