@@ -124,6 +124,7 @@ export default async function OutfitsPage() {
       occasion: (o.occasion as string | null) ?? "",
       liked: (o.liked as boolean | null) ?? null,
       worn_count: (o.worn_count as number | null) ?? 0,
+      itemIds: ids,
       items,
     };
   });

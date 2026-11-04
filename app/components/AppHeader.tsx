@@ -2,6 +2,8 @@ import Link from "next/link";
 import { signOut } from "@/lib/actions";
 import Logo from "./Logo";
 
+type Tab = "closet" | "outfits" | "worn";
+
 const svg = {
   width: 22,
   height: 22,
@@ -30,24 +32,45 @@ function OutfitsIcon() {
   );
 }
 
+function WornIcon() {
+  return (
+    <svg {...svg} aria-hidden="true">
+      <rect x="4" y="5" width="16" height="15" rx="3" />
+      <path d="M4 10h16M8 3v4M16 3v4M9.5 15l2 2 3.5-3.5" />
+    </svg>
+  );
+}
+
+const TABS: { key: Tab; label: string; href: string }[] = [
+  { key: "closet", label: "Closet", href: "/closet" },
+  { key: "outfits", label: "Outfits", href: "/outfits" },
+  { key: "worn", label: "Worn", href: "/worn" },
+];
+
+function TabIcon({ tab }: { tab: Tab }) {
+  if (tab === "closet") return <ClosetIcon />;
+  if (tab === "outfits") return <OutfitsIcon />;
+  return <WornIcon />;
+}
+
 export default function AppHeader({
   name,
   active,
 }: {
   name: string;
-  active: "closet" | "outfits";
+  active: Tab;
 }) {
   const first = name.split(/[\s@]/)[0] || "there";
   const initial = (first[0] ?? "O").toUpperCase();
 
-  const desktopTab = (key: "closet" | "outfits") =>
+  const desktopTab = (key: Tab) =>
     `rounded-full px-4 py-2 text-sm transition ${
       active === key
         ? "bg-ink text-cream"
         : "text-ink/60 hover:bg-paper hover:text-ink"
     }`;
 
-  const mobileTab = (key: "closet" | "outfits") =>
+  const mobileTab = (key: Tab) =>
     `flex flex-1 flex-col items-center gap-1 py-2.5 text-[11px] font-medium transition active:scale-95 ${
       active === key ? "text-clay" : "text-ink/50"
     }`;
@@ -62,12 +85,11 @@ export default function AppHeader({
           </Link>
 
           <nav className="hidden items-center gap-1 md:flex">
-            <Link href="/closet" className={desktopTab("closet")}>
-              Closet
-            </Link>
-            <Link href="/outfits" className={desktopTab("outfits")}>
-              Outfits
-            </Link>
+            {TABS.map((t) => (
+              <Link key={t.key} href={t.href} className={desktopTab(t.key)}>
+                {t.label}
+              </Link>
+            ))}
           </nav>
 
           <div className="flex items-center gap-3">
@@ -94,14 +116,12 @@ export default function AppHeader({
         aria-label="Main"
         className="safe-bottom fixed inset-x-0 bottom-0 z-40 flex border-t border-line bg-paper md:hidden"
       >
-        <Link href="/closet" className={mobileTab("closet")}>
-          <ClosetIcon />
-          Closet
-        </Link>
-        <Link href="/outfits" className={mobileTab("outfits")}>
-          <OutfitsIcon />
-          Outfits
-        </Link>
+        {TABS.map((t) => (
+          <Link key={t.key} href={t.href} className={mobileTab(t.key)}>
+            <TabIcon tab={t.key} />
+            {t.label}
+          </Link>
+        ))}
       </nav>
     </>
   );

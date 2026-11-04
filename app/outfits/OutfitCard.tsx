@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { stableUrl } from "@/lib/urlCache";
+import { todayIso } from "@/lib/dates";
 import { UNDO_MS } from "@/lib/wardrobe";
+import WearModal from "../components/WearModal";
 
 export type OutfitView = {
   id: string;
@@ -13,6 +16,7 @@ export type OutfitView = {
   occasion: string;
   liked: boolean | null;
   worn_count: number;
+  itemIds: string[]; // every item in the outfit (kept for the Worn diary)
   items: { id: string; key: string; url: string; label: string }[];
 };
 
@@ -60,7 +64,11 @@ export default function OutfitCard({ outfit }: { outfit: OutfitView }) {
   // shown straight away; the database catches up in the background
   const [liked, setLiked] = useState<boolean | null>(outfit.liked);
   const [worn, setWorn] = useState(outfit.worn_count);
+  // the "where did you wear it?" pop-up (holds today's date from the moment you tapped)
+  const [wearing, setWearing] = useState<{ today: string } | null>(null);
+  const [saved, setSaved] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     setLiked(outfit.liked);
@@ -70,6 +78,7 @@ export default function OutfitCard({ outfit }: { outfit: OutfitView }) {
   useEffect(() => {
     return () => {
       if (timer.current) clearTimeout(timer.current);
+      if (savedTimer.current) clearTimeout(savedTimer.current);
     };
   }, []);
 
@@ -93,22 +102,40 @@ export default function OutfitCard({ outfit }: { outfit: OutfitView }) {
     void save({ liked: next }, () => setLiked(prev));
   }
 
-  function wore() {
+  function openWear() {
+    setWearing({ today: todayIso() });
+  }
+
+  // Adds an entry to the Worn diary (with where and when), then updates this card.
+  async function logWear(place: string, date: string): Promise<string | null> {
+    const supabase = createClient();
+    const { error: wearErr } = await supabase.from("outfit_wears").insert({
+      outfit_id: outfit.id,
+      outfit_name: outfit.name,
+      occasion: outfit.occasion,
+      item_ids: outfit.itemIds,
+      place: place || null,
+      worn_on: date,
+    });
+    if (wearErr) return "Could not save that. Please try again.";
+
     const prevWorn = worn;
     const prevLiked = liked;
     setWorn(prevWorn + 1);
     if (prevLiked === null) setLiked(true);
-    void save(
-      {
-        worn_count: prevWorn + 1,
-        last_worn_at: new Date().toISOString(),
-        ...(prevLiked === null ? { liked: true } : {}),
-      },
-      () => {
-        setWorn(prevWorn);
-        setLiked(prevLiked);
-      }
-    );
+
+    const values: Record<string, unknown> = { worn_count: prevWorn + 1 };
+    if (date === todayIso()) values.last_worn_at = new Date().toISOString();
+    if (prevLiked === null) values.liked = true;
+    void save(values, () => {
+      setWorn(prevWorn);
+      setLiked(prevLiked);
+    });
+
+    setSaved(true);
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+    savedTimer.current = setTimeout(() => setSaved(false), 5000);
+    return null;
   }
 
   // No popup: the card is hidden at once and can be brought back with Undo.
@@ -163,78 +190,102 @@ export default function OutfitCard({ outfit }: { outfit: OutfitView }) {
   const cols = Math.min(Math.max(outfit.items.length, 1), 3);
 
   return (
-    <article className="card overflow-hidden">
-      {outfit.items.length === 0 ? (
-        <div className="flex aspect-[3/2] items-center justify-center bg-sand/40 text-xs text-ink/50">
-          These items were removed
-        </div>
-      ) : (
-        <div
-          className="grid gap-1 bg-paper p-1.5"
-          style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
-        >
-          {outfit.items.map((it) =>
-            it.url ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                key={it.id}
-                src={stableUrl(it.key, it.url)}
-                suppressHydrationWarning
-                alt={it.label}
-                title={it.label}
-                className="aspect-square w-full rounded-2xl bg-sand/40 object-cover"
-                loading="lazy"
-                decoding="async"
-              />
-            ) : (
-              <div key={it.id} className="skeleton aspect-square rounded-2xl" />
-            )
+    <>
+      <article className="card overflow-hidden">
+        {outfit.items.length === 0 ? (
+          <div className="flex aspect-[3/2] items-center justify-center bg-sand/40 text-xs text-ink/50">
+            These items were removed
+          </div>
+        ) : (
+          <div
+            className="grid gap-1 bg-paper p-1.5"
+            style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+          >
+            {outfit.items.map((it) =>
+              it.url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  key={it.id}
+                  src={stableUrl(it.key, it.url)}
+                  suppressHydrationWarning
+                  alt={it.label}
+                  title={it.label}
+                  className="aspect-square w-full rounded-2xl bg-sand/40 object-cover"
+                  loading="lazy"
+                  decoding="async"
+                />
+              ) : (
+                <div key={it.id} className="skeleton aspect-square rounded-2xl" />
+              )
+            )}
+          </div>
+        )}
+
+        <div className="p-4 pt-3">
+          <div className="mb-1 flex items-start justify-between gap-2">
+            <h3 className="font-display text-xl leading-tight">{outfit.name}</h3>
+            <span className="chip shrink-0">{outfit.occasion}</span>
+          </div>
+          <p className="mb-2 text-sm leading-relaxed text-ink/70">
+            {outfit.reason}
+          </p>
+          <p className="mb-4 text-xs capitalize text-ink/45">
+            {outfit.items.map((i) => i.label).join(" + ")}
+          </p>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={toggleLike}
+              aria-pressed={liked === true}
+              className={`btn btn-sm ${liked === true ? "btn-primary" : "btn-ghost"}`}
+            >
+              <HeartIcon filled={liked === true} />
+              Like
+            </button>
+            <button
+              disabled={busy}
+              onClick={() => removeWith("hidden")}
+              className="btn btn-ghost btn-sm"
+            >
+              Not for me
+            </button>
+            <button onClick={openWear} className="btn btn-ghost btn-sm">
+              Wore it{worn > 0 ? ` (${worn})` : ""}
+            </button>
+            <button
+              disabled={busy}
+              onClick={() => removeWith("deleted")}
+              aria-label="Delete outfit"
+              title="Delete"
+              className="ml-auto grid h-10 w-10 place-items-center rounded-full text-ink/45 transition hover:bg-sand/60 hover:text-red-700 disabled:opacity-50"
+            >
+              <TrashIcon />
+            </button>
+          </div>
+
+          {saved && (
+            <p className="mt-3 text-xs text-sage">
+              Saved to your{" "}
+              <Link href="/worn" className="underline">
+                Worn diary
+              </Link>
+              .
+            </p>
           )}
         </div>
+      </article>
+
+      {wearing && (
+        <WearModal
+          title="Where did you wear it?"
+          subtitle={outfit.name}
+          initialDate={wearing.today}
+          maxDate={wearing.today}
+          saveLabel="Save to diary"
+          onSave={logWear}
+          onClose={() => setWearing(null)}
+        />
       )}
-
-      <div className="p-4 pt-3">
-        <div className="mb-1 flex items-start justify-between gap-2">
-          <h3 className="font-display text-xl leading-tight">{outfit.name}</h3>
-          <span className="chip shrink-0">{outfit.occasion}</span>
-        </div>
-        <p className="mb-2 text-sm leading-relaxed text-ink/70">
-          {outfit.reason}
-        </p>
-        <p className="mb-4 text-xs capitalize text-ink/45">
-          {outfit.items.map((i) => i.label).join(" + ")}
-        </p>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={toggleLike}
-            aria-pressed={liked === true}
-            className={`btn btn-sm ${liked === true ? "btn-primary" : "btn-ghost"}`}
-          >
-            <HeartIcon filled={liked === true} />
-            Like
-          </button>
-          <button
-            disabled={busy}
-            onClick={() => removeWith("hidden")}
-            className="btn btn-ghost btn-sm"
-          >
-            Not for me
-          </button>
-          <button onClick={wore} className="btn btn-ghost btn-sm">
-            Wore it{worn > 0 ? ` (${worn})` : ""}
-          </button>
-          <button
-            disabled={busy}
-            onClick={() => removeWith("deleted")}
-            aria-label="Delete outfit"
-            title="Delete"
-            className="ml-auto grid h-10 w-10 place-items-center rounded-full text-ink/45 transition hover:bg-sand/60 hover:text-red-700 disabled:opacity-50"
-          >
-            <TrashIcon />
-          </button>
-        </div>
-      </div>
-    </article>
+    </>
   );
 }
