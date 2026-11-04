@@ -117,19 +117,23 @@ export default function Tagger({
   return (
     <div className="mt-4 text-sm">
       {running && !rechecking && (
-        <p className="text-[#1F1F1F]/70">
+        <div className="flex items-center gap-3 rounded-2xl bg-sage-soft px-4 py-3 text-ink/80">
+          <span
+            className="h-3 w-3 animate-pulse rounded-full bg-sage"
+            aria-hidden="true"
+          />
           AI is tagging your clothes... {progress.done}/{progress.total}
-        </p>
+        </div>
       )}
       {running && rechecking && (
-        <p className="text-xs text-[#1F1F1F]/50">
+        <p className="text-xs text-ink/50">
           Double-checking a few older labels in the background...
         </p>
       )}
       {!running && allIds.length > 0 && (
         <button
           onClick={() => run(allIds, false)}
-          className="rounded-xl border border-[#1F1F1F] px-4 py-2 transition hover:bg-[#1F1F1F] hover:text-white"
+          className="btn btn-ghost btn-sm"
         >
           Tag {allIds.length} {allIds.length === 1 ? "item" : "items"} with AI
           {failedIds.length > 0 ? ` (${failedIds.length} failed before)` : ""}

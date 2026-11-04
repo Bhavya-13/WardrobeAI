@@ -27,6 +27,22 @@ export type Item = {
   is_prescription: boolean | null;
 };
 
+// Filter pills shown above the grid (only the ones that have items appear).
+const GROUPS: { key: string; label: string; match: (c: string | null) => boolean }[] = [
+  { key: "all", label: "All", match: () => true },
+  { key: "top", label: "Tops", match: (c) => c === "top" },
+  { key: "bottom", label: "Bottoms", match: (c) => c === "bottom" },
+  { key: "one_piece", label: "One-pieces", match: (c) => c === "one_piece" },
+  { key: "outerwear", label: "Outerwear", match: (c) => c === "outerwear" },
+  { key: "footwear", label: "Shoes", match: (c) => c === "footwear" },
+  { key: "eyewear", label: "Eyewear", match: (c) => c === "eyewear" },
+  {
+    key: "more",
+    label: "Bags and more",
+    match: (c) => c === "bag" || c === "accessory" || c === "other",
+  },
+];
+
 function Select({
   label,
   value,
@@ -39,12 +55,12 @@ function Select({
   onChange: (v: string) => void;
 }) {
   return (
-    <label className="block text-xs text-[#1F1F1F]/70">
+    <label className="block text-xs text-ink/70">
       {label}
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full rounded-lg border border-[#1F1F1F]/20 bg-white px-2 py-2 text-sm capitalize text-[#1F1F1F]"
+        className="input mt-1 capitalize"
       >
         {options.map((o) => (
           <option key={o} value={o}>
@@ -61,6 +77,7 @@ export default function ItemGrid({ items }: { items: Item[] }) {
   const [removed, setRemoved] = useState<Record<string, boolean>>({});
   const [editing, setEditing] = useState<Item | null>(null);
   const [saving, setSaving] = useState(false);
+  const [filter, setFilter] = useState("all");
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => {
@@ -114,28 +131,53 @@ export default function ItemGrid({ items }: { items: Item[] }) {
 
   if (items.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-[#1F1F1F]/30 p-10 text-center text-[#1F1F1F]/60">
-        Your closet is empty. Tap &quot;Add photos&quot; to upload your first
-        items, or &quot;Add from a photo of me&quot;.
+      <div className="card px-6 py-14 text-center">
+        <p className="font-display text-xl">Your closet is empty</p>
+        <p className="mx-auto mt-2 max-w-sm text-sm text-ink/60">
+          Tap &quot;Add photos&quot; to upload your clothes, or &quot;Add from a
+          photo of me&quot; to add a whole outfit in one go.
+        </p>
       </div>
     );
   }
 
+  const counts: Record<string, number> = {};
+  GROUPS.forEach((g) => {
+    counts[g.key] = items.filter((i) => g.match(i.category)).length;
+  });
+  const activeKey = counts[filter] > 0 ? filter : "all";
+  const active = GROUPS.find((g) => g.key === activeKey) ?? GROUPS[0];
+  const visible = items.filter((i) => active.match(i.category));
+
   return (
     <>
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-        {items.map((item) => {
+      <div
+        className="no-scrollbar -mx-4 mb-5 flex gap-2 overflow-x-auto px-4 sm:mx-0 sm:flex-wrap sm:px-0"
+        role="group"
+        aria-label="Filter your closet"
+      >
+        {GROUPS.filter((g) => g.key === "all" || counts[g.key] > 0).map((g) => (
+          <button
+            key={g.key}
+            onClick={() => setFilter(g.key)}
+            aria-pressed={activeKey === g.key}
+            className="chip-btn"
+          >
+            {g.label} ({counts[g.key]})
+          </button>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4">
+        {visible.map((item) => {
           if (removed[item.id]) {
             return (
               <div
                 key={item.id}
-                className="flex aspect-square flex-col items-center justify-center gap-2 rounded-2xl bg-white/70 p-3 text-center text-xs"
+                className="flex aspect-square flex-col items-center justify-center gap-3 rounded-3xl bg-sand/50 p-3 text-center text-sm"
               >
-                <span>Item removed</span>
-                <button
-                  onClick={() => undo(item)}
-                  className="rounded-lg border border-[#1F1F1F] px-3 py-1 transition hover:bg-[#1F1F1F] hover:text-white"
-                >
+                <span className="text-ink/70">Item removed</span>
+                <button onClick={() => undo(item)} className="btn btn-ghost btn-sm">
                   Undo
                 </button>
               </div>
@@ -172,10 +214,7 @@ export default function ItemGrid({ items }: { items: Item[] }) {
             : [];
 
           return (
-            <div
-              key={item.id}
-              className="overflow-hidden rounded-2xl bg-white shadow-sm"
-            >
+            <div key={item.id} className="card overflow-hidden">
               {item.url ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
@@ -185,32 +224,35 @@ export default function ItemGrid({ items }: { items: Item[] }) {
                   loading="lazy"
                 />
               ) : (
-                <div className="aspect-square w-full bg-[#1F1F1F]/5" />
+                <div className="aspect-square w-full bg-sand/50" />
               )}
-              <div className="px-3 py-2">
-                <p className="text-sm font-medium capitalize">{title}</p>
+              <div className="px-3 pb-3 pt-2.5">
+                <p
+                  className={`text-sm font-medium capitalize ${
+                    done ? "" : "animate-pulse text-ink/50"
+                  }`}
+                >
+                  {title}
+                </p>
                 {chips.length > 0 && (
-                  <div className="mt-1 flex flex-wrap gap-1">
+                  <div className="mt-1.5 flex flex-wrap gap-1">
                     {chips.map((c, i) => (
-                      <span
-                        key={i}
-                        className="rounded-full bg-[#F6F1EA] px-2 py-0.5 text-[10px] capitalize text-[#1F1F1F]/70"
-                      >
+                      <span key={i} className="chip">
                         {c}
                       </span>
                     ))}
                   </div>
                 )}
-                <div className="mt-2 flex gap-3 text-xs">
+                <div className="mt-2 flex gap-4 text-xs">
                   <button
                     onClick={() => setEditing({ ...item })}
-                    className="hover:underline"
+                    className="-ml-1 px-1 py-2 text-ink/70 hover:text-ink hover:underline"
                   >
                     Edit
                   </button>
                   <button
                     onClick={() => remove(item)}
-                    className="text-red-700 hover:underline"
+                    className="px-1 py-2 text-red-700 hover:underline"
                   >
                     Remove
                   </button>
@@ -223,14 +265,14 @@ export default function ItemGrid({ items }: { items: Item[] }) {
 
       {editing && (
         <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 sm:items-center sm:p-4"
           onClick={() => !saving && setEditing(null)}
         >
           <div
-            className="w-full max-w-md rounded-2xl bg-[#F6F1EA] p-5 text-[#1F1F1F] shadow-xl"
+            className="sheet max-h-[92vh] w-full max-w-md overflow-y-auto overscroll-contain rounded-t-3xl bg-cream p-5 shadow-xl sm:rounded-3xl sm:p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="mb-4 text-lg font-semibold">Fix this item</h3>
+            <h3 className="mb-4 font-display text-2xl">Fix this item</h3>
             <div className="grid grid-cols-2 gap-3">
               <Select
                 label="Category"
@@ -238,7 +280,7 @@ export default function ItemGrid({ items }: { items: Item[] }) {
                 options={CATEGORIES}
                 onChange={(v) => setEditing({ ...editing, category: v })}
               />
-              <label className="block text-xs text-[#1F1F1F]/70">
+              <label className="block text-xs text-ink/70">
                 Type (e.g. polo, shorts)
                 <input
                   value={editing.subtype ?? ""}
@@ -246,10 +288,10 @@ export default function ItemGrid({ items }: { items: Item[] }) {
                     setEditing({ ...editing, subtype: e.target.value })
                   }
                   maxLength={30}
-                  className="mt-1 w-full rounded-lg border border-[#1F1F1F]/20 bg-white px-2 py-2 text-sm text-[#1F1F1F]"
+                  className="input mt-1"
                 />
               </label>
-              <label className="block text-xs text-[#1F1F1F]/70">
+              <label className="block text-xs text-ink/70">
                 Color
                 <input
                   value={editing.color ?? ""}
@@ -257,7 +299,7 @@ export default function ItemGrid({ items }: { items: Item[] }) {
                     setEditing({ ...editing, color: e.target.value })
                   }
                   maxLength={40}
-                  className="mt-1 w-full rounded-lg border border-[#1F1F1F]/20 bg-white px-2 py-2 text-sm text-[#1F1F1F]"
+                  className="input mt-1"
                 />
               </label>
               <Select
@@ -279,30 +321,31 @@ export default function ItemGrid({ items }: { items: Item[] }) {
                 onChange={(v) => setEditing({ ...editing, season: v })}
               />
               {editing.category === "eyewear" && (
-                <label className="col-span-2 flex items-center gap-2 text-sm">
+                <label className="col-span-2 flex items-center gap-3 rounded-2xl bg-paper px-4 py-3 text-sm">
                   <input
                     type="checkbox"
                     checked={editing.is_prescription === true}
                     onChange={(e) =>
                       setEditing({ ...editing, is_prescription: e.target.checked })
                     }
+                    className="h-5 w-5 accent-clay"
                   />
                   Prescription glasses (I need these to see)
                 </label>
               )}
             </div>
-            <div className="mt-5 flex justify-end gap-2">
+            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <button
                 onClick={() => setEditing(null)}
                 disabled={saving}
-                className="rounded-xl border border-[#1F1F1F]/30 px-4 py-2 text-sm"
+                className="btn btn-ghost"
               >
                 Cancel
               </button>
               <button
                 onClick={saveEdit}
                 disabled={saving}
-                className="rounded-xl bg-[#1F1F1F] px-5 py-2 text-sm text-white disabled:opacity-50"
+                className="btn btn-primary"
               >
                 {saving ? "Saving..." : "Save"}
               </button>

@@ -15,6 +15,42 @@ export type OutfitView = {
   items: { id: string; url: string; label: string }[];
 };
 
+function HeartIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill={filled ? "currentColor" : "none"}
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 20.5s-7.5-4.6-9.2-9.2A5 5 0 0 1 12 6.6a5 5 0 0 1 9.2 4.7c-1.7 4.6-9.2 9.2-9.2 9.2z" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />
+    </svg>
+  );
+}
+
 export default function OutfitCard({ outfit }: { outfit: OutfitView }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -65,39 +101,33 @@ export default function OutfitCard({ outfit }: { outfit: OutfitView }) {
 
   if (removed) {
     return (
-      <article className="flex items-center justify-between gap-3 rounded-2xl bg-white/70 px-4 py-8 text-sm">
-        <span>
+      <article className="flex items-center justify-between gap-3 rounded-3xl bg-sand/50 px-5 py-10 text-sm">
+        <span className="text-ink/70">
           {removed === "deleted"
             ? "Outfit deleted."
             : "Hidden. I will avoid looks like this."}
         </span>
-        <button
-          onClick={undo}
-          disabled={busy}
-          className="rounded-lg border border-[#1F1F1F] px-3 py-1.5 text-xs transition hover:bg-[#1F1F1F] hover:text-white disabled:opacity-50"
-        >
+        <button onClick={undo} disabled={busy} className="btn btn-ghost btn-sm">
           Undo
         </button>
       </article>
     );
   }
 
-  const btn = (active: boolean) =>
-    `rounded-lg border px-3 py-1.5 text-xs transition disabled:opacity-50 ${
-      active
-        ? "border-[#1F1F1F] bg-[#1F1F1F] text-white"
-        : "border-[#1F1F1F]/30 hover:border-[#1F1F1F]"
-    }`;
+  const cols = Math.min(Math.max(outfit.items.length, 1), 3);
 
   return (
-    <article className="overflow-hidden rounded-2xl bg-white shadow-sm">
-      <div className="grid auto-cols-fr grid-flow-col gap-px bg-[#1F1F1F]/10">
-        {outfit.items.length === 0 ? (
-          <div className="flex aspect-[3/2] items-center justify-center bg-white text-xs text-[#1F1F1F]/50">
-            These items were removed
-          </div>
-        ) : (
-          outfit.items.map((it) =>
+    <article className="card overflow-hidden">
+      {outfit.items.length === 0 ? (
+        <div className="flex aspect-[3/2] items-center justify-center bg-sand/40 text-xs text-ink/50">
+          These items were removed
+        </div>
+      ) : (
+        <div
+          className="grid gap-1 bg-paper p-1.5"
+          style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+        >
+          {outfit.items.map((it) =>
             it.url ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -105,25 +135,25 @@ export default function OutfitCard({ outfit }: { outfit: OutfitView }) {
                 src={it.url}
                 alt={it.label}
                 title={it.label}
-                className="aspect-square w-full object-cover"
+                className="aspect-square w-full rounded-2xl object-cover"
                 loading="lazy"
               />
             ) : (
-              <div key={it.id} className="aspect-square bg-[#1F1F1F]/5" />
+              <div key={it.id} className="aspect-square rounded-2xl bg-sand/50" />
             )
-          )
-        )}
-      </div>
-
-      <div className="p-4">
-        <div className="mb-1 flex items-start justify-between gap-2">
-          <h3 className="font-semibold">{outfit.name}</h3>
-          <span className="shrink-0 rounded-full bg-[#F6F1EA] px-2 py-0.5 text-[10px] text-[#1F1F1F]/70">
-            {outfit.occasion}
-          </span>
+          )}
         </div>
-        <p className="mb-1 text-sm text-[#1F1F1F]/70">{outfit.reason}</p>
-        <p className="mb-3 text-xs capitalize text-[#1F1F1F]/50">
+      )}
+
+      <div className="p-4 pt-3">
+        <div className="mb-1 flex items-start justify-between gap-2">
+          <h3 className="font-display text-xl leading-tight">{outfit.name}</h3>
+          <span className="chip shrink-0">{outfit.occasion}</span>
+        </div>
+        <p className="mb-2 text-sm leading-relaxed text-ink/70">
+          {outfit.reason}
+        </p>
+        <p className="mb-4 text-xs capitalize text-ink/45">
           {outfit.items.map((i) => i.label).join(" + ")}
         </p>
 
@@ -131,14 +161,16 @@ export default function OutfitCard({ outfit }: { outfit: OutfitView }) {
           <button
             disabled={busy}
             onClick={() => update({ liked: outfit.liked === true ? null : true })}
-            className={btn(outfit.liked === true)}
+            aria-pressed={outfit.liked === true}
+            className={`btn btn-sm ${outfit.liked === true ? "btn-primary" : "btn-ghost"}`}
           >
+            <HeartIcon filled={outfit.liked === true} />
             Like
           </button>
           <button
             disabled={busy}
             onClick={() => removeWith("hidden")}
-            className={btn(false)}
+            className="btn btn-ghost btn-sm"
           >
             Not for me
           </button>
@@ -151,16 +183,18 @@ export default function OutfitCard({ outfit }: { outfit: OutfitView }) {
                 ...(outfit.liked === null ? { liked: true } : {}),
               })
             }
-            className={btn(false)}
+            className="btn btn-ghost btn-sm"
           >
             Wore it{outfit.worn_count > 0 ? ` (${outfit.worn_count})` : ""}
           </button>
           <button
             disabled={busy}
             onClick={() => removeWith("deleted")}
-            className="ml-auto text-xs text-red-700 hover:underline disabled:opacity-50"
+            aria-label="Delete outfit"
+            title="Delete"
+            className="ml-auto grid h-10 w-10 place-items-center rounded-full text-ink/45 transition hover:bg-sand/60 hover:text-red-700 disabled:opacity-50"
           >
-            Delete
+            <TrashIcon />
           </button>
         </div>
       </div>

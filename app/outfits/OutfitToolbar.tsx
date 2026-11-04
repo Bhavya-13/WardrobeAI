@@ -41,14 +41,14 @@ export default function OutfitToolbar({ ids }: { ids: string[] }) {
 
   if (undoIds) {
     return (
-      <div className="mb-4 flex items-center gap-3 text-sm">
+      <div className="mb-5 flex items-center gap-3 rounded-2xl bg-sage-soft px-4 py-3 text-sm">
         <span>
           Hid {undoIds.length} {undoIds.length === 1 ? "outfit" : "outfits"}.
         </span>
         <button
           onClick={undo}
           disabled={busy}
-          className="rounded-lg border border-[#1F1F1F] px-3 py-1 text-xs transition hover:bg-[#1F1F1F] hover:text-white disabled:opacity-50"
+          className="btn btn-ghost btn-sm ml-auto"
         >
           Undo
         </button>
@@ -59,11 +59,11 @@ export default function OutfitToolbar({ ids }: { ids: string[] }) {
   if (ids.length === 0) return null;
 
   return (
-    <div className="mb-4">
+    <div className="mb-5">
       <button
         onClick={hideAll}
         disabled={busy}
-        className="rounded-lg border border-[#1F1F1F]/30 px-3 py-1.5 text-xs transition hover:border-[#1F1F1F] disabled:opacity-50"
+        className="btn btn-ghost btn-sm"
       >
         Hide all outfits I have not liked ({ids.length})
       </button>

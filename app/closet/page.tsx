@@ -117,18 +117,26 @@ export default async function ClosetPage() {
   const name = user.user_metadata?.full_name ?? user.email ?? "there";
 
   return (
-    <main className="min-h-screen bg-[#F6F1EA] px-5 py-8 text-[#1F1F1F]">
-      <div className="mx-auto max-w-5xl">
-        <AppHeader name={name} active="closet" />
+    <div className="min-h-screen bg-cream pb-28 text-ink md:pb-12">
+      <AppHeader name={name} active="closet" />
 
-        <section className="mb-8">
-          <h2 className="mb-1 text-xl font-semibold">Your closet</h2>
-          <p className="mb-4 text-sm text-[#1F1F1F]/60">
-            {gridItems.length} {gridItems.length === 1 ? "item" : "items"}. Add
-            photos of your clothes, or one photo of you wearing them. Tap
-            &quot;Edit&quot; on a card to fix a wrong label.
+      <main className="fade-up mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-10">
+        <div className="mb-6">
+          <h1 className="font-display text-3xl tracking-tight sm:text-4xl">
+            Your closet
+          </h1>
+          <p className="mt-1 text-sm text-ink/60">
+            {gridItems.length} {gridItems.length === 1 ? "item" : "items"}
           </p>
-          <div className="flex flex-wrap items-start gap-3">
+        </div>
+
+        <section className="card mb-8 p-5 sm:p-6">
+          <h2 className="font-display text-xl">Add to your closet</h2>
+          <p className="mb-4 mt-1 text-sm text-ink/60">
+            Upload photos of single items, or one photo of you wearing them and
+            Outfi will pick out each piece.
+          </p>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
             <Uploader />
             <SelfieExtractor />
           </div>
@@ -140,7 +148,7 @@ export default async function ClosetPage() {
         </section>
 
         <ItemGrid items={gridItems} />
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }

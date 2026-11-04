@@ -228,27 +228,41 @@ export default function SelfieExtractor() {
       <button
         onClick={() => inputRef.current?.click()}
         disabled={step !== "idle"}
-        className="rounded-xl border border-[#1F1F1F] px-6 py-3 transition hover:bg-[#1F1F1F] hover:text-white disabled:opacity-50"
+        className="btn btn-ghost w-full sm:w-auto"
       >
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M4 8h3l1.5-2h7L17 8h3v11H4z" />
+          <circle cx="12" cy="13" r="3.2" />
+        </svg>
         {step === "detecting"
           ? "Finding your clothes..."
           : "Add from a photo of me"}
       </button>
-      {notice && <p className="mt-2 text-sm text-green-800">{notice}</p>}
+      {notice && <p className="mt-2 text-sm text-sage">{notice}</p>}
       {error && step === "idle" && (
         <p className="mt-2 max-w-md text-sm text-red-700">{error}</p>
       )}
 
       {(step === "review" || step === "saving") && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-3 sm:items-center">
-          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-[#F6F1EA] p-5 text-[#1F1F1F] shadow-xl">
-            <h3 className="text-lg font-semibold">Found in your photo</h3>
-            <p className="mb-4 text-sm text-[#1F1F1F]/60">
-              Untick anything wrong. Your photo is not saved, only the items you
-              add.
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 sm:items-center sm:p-4">
+          <div className="sheet max-h-[92vh] w-full max-w-2xl overflow-y-auto overscroll-contain rounded-t-3xl bg-cream p-5 shadow-xl sm:rounded-3xl sm:p-6">
+            <h3 className="font-display text-2xl">Found in your photo</h3>
+            <p className="mb-4 mt-1 text-sm text-ink/60">
+              Tap an item to untick it if it is wrong. Your photo is not saved,
+              only the items you add.
             </p>
 
-            <label className="mb-4 block text-xs text-[#1F1F1F]/70">
+            <label className="mb-4 block text-xs text-ink/70">
               Space around each item: {Math.round(margin * 100)}%
               <input
                 type="range"
@@ -258,7 +272,7 @@ export default function SelfieExtractor() {
                 value={Math.round(margin * 100)}
                 onChange={(e) => setMargin(Number(e.target.value) / 100)}
                 disabled={step === "saving"}
-                className="mt-1 w-full"
+                className="mt-2 w-full accent-clay"
               />
             </label>
 
@@ -274,8 +288,9 @@ export default function SelfieExtractor() {
                       )
                     )
                   }
-                  className={`overflow-hidden rounded-xl bg-white text-left shadow-sm ring-2 transition ${
-                    it.selected ? "ring-[#1F1F1F]" : "opacity-50 ring-transparent"
+                  aria-pressed={it.selected}
+                  className={`relative overflow-hidden rounded-2xl bg-paper text-left shadow-soft ring-2 transition ${
+                    it.selected ? "ring-clay" : "opacity-50 ring-transparent"
                   }`}
                 >
                   {previews[it.id] ? (
@@ -283,17 +298,39 @@ export default function SelfieExtractor() {
                     <img
                       src={previews[it.id]}
                       alt={it.note || it.label}
-                      className="aspect-square w-full bg-[#1F1F1F]/5 object-contain"
+                      className="aspect-square w-full bg-sand/50 object-contain"
                     />
                   ) : (
-                    <div className="aspect-square w-full bg-[#1F1F1F]/5" />
+                    <div className="aspect-square w-full bg-sand/50" />
                   )}
-                  <div className="px-2 py-1.5">
+                  <span
+                    className={`absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full border text-cream ${
+                      it.selected
+                        ? "border-clay bg-clay"
+                        : "border-ink/30 bg-paper"
+                    }`}
+                  >
+                    {it.selected && (
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="3"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M5 12.5l4.5 4.5L19 7.5" />
+                      </svg>
+                    )}
+                  </span>
+                  <div className="px-3 py-2">
                     <p className="text-xs font-medium capitalize">
-                      {it.selected ? "[x] " : "[ ] "}
                       {pretty(it.label)}
                     </p>
-                    <p className="truncate text-[10px] text-[#1F1F1F]/60">
+                    <p className="truncate text-[11px] text-ink/55">
                       {it.note}
                     </p>
                   </div>
@@ -303,18 +340,18 @@ export default function SelfieExtractor() {
 
             {error && <p className="mt-3 text-sm text-red-700">{error}</p>}
 
-            <div className="mt-5 flex justify-end gap-2">
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <button
                 onClick={cancel}
                 disabled={step === "saving"}
-                className="rounded-xl border border-[#1F1F1F]/30 px-4 py-2 text-sm"
+                className="btn btn-ghost"
               >
                 Cancel
               </button>
               <button
                 onClick={addSelected}
                 disabled={step === "saving" || selectedCount === 0}
-                className="rounded-xl bg-[#1F1F1F] px-5 py-2 text-sm text-white disabled:opacity-50"
+                className="btn btn-primary"
               >
                 {step === "saving"
                   ? "Adding..."

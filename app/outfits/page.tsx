@@ -132,25 +132,37 @@ export default async function OutfitsPage() {
   const name = user.user_metadata?.full_name ?? user.email ?? "there";
 
   return (
-    <main className="min-h-screen bg-[#F6F1EA] px-5 py-8 text-[#1F1F1F]">
-      <div className="mx-auto max-w-5xl">
-        <AppHeader name={name} active="outfits" />
+    <div className="min-h-screen bg-cream pb-28 text-ink md:pb-12">
+      <AppHeader name={name} active="outfits" />
+
+      <main className="fade-up mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-10">
+        <div className="mb-6">
+          <h1 className="font-display text-3xl tracking-tight sm:text-4xl">
+            Outfits
+          </h1>
+          <p className="mt-1 text-sm text-ink/60">
+            Fresh looks from the clothes you already own.
+          </p>
+        </div>
 
         <OutfitGenerator initialGlasses={glassesMode} />
 
         {hints.length > 0 && (
-          <ul className="mt-4 space-y-1 rounded-xl bg-white/60 p-4 text-sm text-[#1F1F1F]/70">
+          <ul className="mt-4 space-y-1.5 rounded-2xl bg-blush/50 p-4 text-sm text-ink/75">
             {hints.map((h, i) => (
-              <li key={i}>- {h}</li>
+              <li key={i}>{h}</li>
             ))}
           </ul>
         )}
 
-        <h2 className="mb-3 mt-8 text-xl font-semibold">Your outfits</h2>
+        <h2 className="mb-3 mt-10 font-display text-2xl">Your outfits</h2>
         <OutfitToolbar ids={notLikedIds} />
         {views.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-[#1F1F1F]/30 p-10 text-center text-[#1F1F1F]/60">
-            No outfits yet. Pick an occasion above and tap &quot;Make 3 outfits&quot;.
+          <div className="card px-6 py-14 text-center">
+            <p className="font-display text-xl">No outfits yet</p>
+            <p className="mx-auto mt-2 max-w-sm text-sm text-ink/60">
+              Pick an occasion above and tap &quot;Make 3 outfits&quot;.
+            </p>
           </div>
         ) : (
           <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
@@ -159,7 +171,7 @@ export default async function OutfitsPage() {
             ))}
           </div>
         )}
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }

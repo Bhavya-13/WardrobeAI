@@ -59,44 +59,52 @@ export default function OutfitGenerator({
   }
 
   return (
-    <div className="rounded-2xl bg-white p-5 shadow-sm">
-      <h2 className="mb-3 text-lg font-semibold">Make me outfits</h2>
-      <div className="flex flex-col gap-3 sm:flex-row">
-        <select
-          value={occasion}
-          onChange={(e) => setOccasion(e.target.value)}
-          disabled={loading}
-          className="rounded-xl border border-[#1F1F1F]/20 bg-white px-3 py-2 text-sm"
-        >
-          {OCCASIONS.map((o) => (
-            <option key={o} value={o}>
-              {o}
-            </option>
-          ))}
-        </select>
+    <div className="card p-5 sm:p-6">
+      <h2 className="font-display text-xl">What is the occasion?</h2>
+
+      <div
+        className="no-scrollbar -mx-5 mt-3 flex gap-2 overflow-x-auto px-5 pb-1 sm:mx-0 sm:flex-wrap sm:px-0"
+        role="group"
+        aria-label="Occasion"
+      >
+        {OCCASIONS.map((o) => (
+          <button
+            key={o}
+            onClick={() => setOccasion(o)}
+            disabled={loading}
+            aria-pressed={occasion === o}
+            className="chip-btn"
+          >
+            {o}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row">
         <input
           value={note}
           onChange={(e) => setNote(e.target.value)}
           disabled={loading}
           maxLength={200}
-          placeholder="Optional: e.g. something comfy, all dark colours"
-          className="flex-1 rounded-xl border border-[#1F1F1F]/20 px-3 py-2 text-sm"
+          placeholder="Optional: something comfy, all dark colours..."
+          className="input flex-1"
         />
         <button
           onClick={generate}
           disabled={loading}
-          className="rounded-xl bg-[#1F1F1F] px-5 py-2 text-sm text-white transition hover:opacity-90 disabled:opacity-50"
+          className="btn btn-primary sm:min-w-44"
         >
           {loading ? "Styling..." : "Make 3 outfits"}
         </button>
       </div>
-      <label className="mt-3 flex items-center gap-2 text-xs text-[#1F1F1F]/70">
-        Glasses:
+
+      <label className="mt-4 flex flex-wrap items-center gap-2 text-sm text-ink/70">
+        Glasses
         <select
           value={glasses}
           onChange={(e) => changeGlasses(e.target.value as GlassesMode)}
           disabled={loading}
-          className="rounded-lg border border-[#1F1F1F]/20 bg-white px-2 py-1 text-xs text-[#1F1F1F]"
+          className="input !min-h-9 !w-auto !py-1 !text-sm"
         >
           {GLASSES_MODES.map((m) => (
             <option key={m.value} value={m.value}>
@@ -105,8 +113,11 @@ export default function OutfitGenerator({
           ))}
         </select>
       </label>
-      {notice && <p className="mt-3 text-sm text-amber-800">{notice}</p>}
-      {error && <p className="mt-3 text-sm text-red-700">{error}</p>}
+
+      {notice && (
+        <p className="mt-4 rounded-2xl bg-blush/50 px-4 py-3 text-sm">{notice}</p>
+      )}
+      {error && <p className="mt-4 text-sm text-red-700">{error}</p>}
     </div>
   );
 }
