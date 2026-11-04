@@ -52,14 +52,18 @@ export default function ItemGrid({ items }: { items: Item[] }) {
             ? "Tag failed"
             : "Tagging...";
         const chips = done
-          ? [
-              item.pattern && item.pattern !== "solid" ? item.pattern : null,
-              item.formality,
-              item.season,
-              ...item.tags.slice(0, 2),
-            ]
-              .filter((c): c is string => Boolean(c))
-              .map(pretty)
+          ? Array.from(
+              new Set(
+                [
+                  item.pattern && item.pattern !== "solid" ? item.pattern : null,
+                  item.formality,
+                  item.season,
+                  ...item.tags.slice(0, 3),
+                ]
+                  .filter((c): c is string => Boolean(c))
+                  .map(pretty)
+              )
+            )
           : [];
 
         return (
