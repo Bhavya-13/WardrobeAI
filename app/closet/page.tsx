@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { after, connection } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionUser } from "@/lib/supabase/user";
+import { imageUrl } from "@/lib/imgUrl";
 import AppHeader from "../components/AppHeader";
 import Uploader from "./Uploader";
 import SelfieExtractor from "./SelfieExtractor";
@@ -64,20 +65,10 @@ export default async function ClosetPage() {
 
   const items = rows ?? [];
 
-  // Photos are private, so we create temporary (1 hour) viewing links.
-  // The small preview is used when there is one (much faster to load).
+  // The small preview is shown when there is one (much faster to load).
+  // Pictures come from our own site, so no "signing" round trip is needed.
   const shownPath = (i: { image_path: unknown; thumb_path: unknown }) =>
     ((i.thumb_path as string | null) ?? (i.image_path as string)) as string;
-
-  const urlByPath: Record<string, string> = {};
-  if (items.length > 0) {
-    const { data: signed } = await supabase.storage
-      .from("wardrobe")
-      .createSignedUrls(items.map(shownPath), 3600);
-    signed?.forEach((s) => {
-      if (s.path && s.signedUrl) urlByPath[s.path] = s.signedUrl;
-    });
-  }
 
   const gridItems: Item[] = items.map((i) => {
     const key = shownPath(i);
@@ -85,7 +76,7 @@ export default async function ClosetPage() {
       id: i.id as string,
       image_path: i.image_path as string,
       key,
-      url: urlByPath[key] ?? "",
+      url: imageUrl(key),
       category: (i.category as string | null) ?? null,
       subtype: (i.subtype as string | null) ?? null,
       color: (i.color as string | null) ?? null,

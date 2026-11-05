@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionUser } from "@/lib/supabase/user";
+import { imageUrl } from "@/lib/imgUrl";
 import AppHeader from "../components/AppHeader";
 import WornCard, { type WornView } from "./WornCard";
 import { CATEGORY_ORDER, pretty } from "@/lib/wardrobe";
@@ -39,7 +40,6 @@ export default async function WornPage() {
     color: string | null;
   };
   const itemById = new Map<string, ItemInfo>();
-  const urlByPath: Record<string, string> = {};
   const shownPath = (i: ItemInfo) => i.thumb_path ?? i.image_path;
 
   if (itemIds.length > 0) {
@@ -49,16 +49,6 @@ export default async function WornPage() {
       .is("deleted_at", null)
       .in("id", itemIds);
     (itemRows ?? []).forEach((r) => itemById.set(r.id as string, r as ItemInfo));
-
-    const paths = (itemRows ?? []).map((r) => shownPath(r as ItemInfo));
-    if (paths.length > 0) {
-      const { data: signed } = await supabase.storage
-        .from("wardrobe")
-        .createSignedUrls(paths, 3600);
-      signed?.forEach((s) => {
-        if (s.path && s.signedUrl) urlByPath[s.path] = s.signedUrl;
-      });
-    }
   }
 
   const views: WornView[] = wears.map((w) => {
@@ -74,7 +64,7 @@ export default async function WornPage() {
       .map((i) => ({
         id: i.id,
         key: shownPath(i),
-        url: urlByPath[shownPath(i)] ?? "",
+        url: imageUrl(shownPath(i)),
         label: pretty(
           [i.color && i.color !== "unknown" ? i.color : null, i.subtype ?? i.category]
             .filter(Boolean)

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionUser } from "@/lib/supabase/user";
+import { imageUrl } from "@/lib/imgUrl";
 import AppHeader from "../components/AppHeader";
 import OutfitGenerator from "./OutfitGenerator";
 import OutfitToolbar from "./OutfitToolbar";
@@ -75,7 +76,6 @@ export default async function OutfitsPage() {
     color: string | null;
   };
   const itemById = new Map<string, ItemInfo>();
-  const urlByPath: Record<string, string> = {};
   const shownPath = (i: ItemInfo) => i.thumb_path ?? i.image_path;
 
   if (itemIds.length > 0) {
@@ -85,16 +85,6 @@ export default async function OutfitsPage() {
       .is("deleted_at", null)
       .in("id", itemIds);
     (itemRows ?? []).forEach((r) => itemById.set(r.id as string, r as ItemInfo));
-
-    const paths = (itemRows ?? []).map((r) => shownPath(r as ItemInfo));
-    if (paths.length > 0) {
-      const { data: signed } = await supabase.storage
-        .from("wardrobe")
-        .createSignedUrls(paths, 3600);
-      signed?.forEach((s) => {
-        if (s.path && s.signedUrl) urlByPath[s.path] = s.signedUrl;
-      });
-    }
   }
 
   const views: OutfitView[] = outfits.map((o) => {
@@ -110,7 +100,7 @@ export default async function OutfitsPage() {
       .map((i) => ({
         id: i.id,
         key: shownPath(i),
-        url: urlByPath[shownPath(i)] ?? "",
+        url: imageUrl(shownPath(i)),
         label: pretty(
           [i.color && i.color !== "unknown" ? i.color : null, i.subtype ?? i.category]
             .filter(Boolean)
