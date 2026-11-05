@@ -31,6 +31,56 @@ const BLOCK_FINISH = [
   "RECITATION",
 ];
 
+// ---------- Remembering which model is out of requests ----------
+// When Google says a model has hit its limit, we remember that for a while and skip
+// it straight away, instead of asking again on every request. The caller then moves
+// on to the lighter model at once (no wasted request, no extra waiting).
+// This memory lives in one server instance, so it is a best-effort shortcut: the
+// normal "try the next model" fallback still works without it.
+
+const blockedUntil = new Map<string, number>();
+const MAX_DAILY_BLOCK_MS = 3 * 3600 * 1000; // look again at least every 3 hours
+
+// Milliseconds until midnight Pacific time, when Google's daily counts reset.
+function msUntilPacificMidnight(): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+    hour12: false,
+  }).formatToParts(new Date());
+  const num = (type: string) =>
+    Number(parts.find((p) => p.type === type)?.value ?? 0);
+  const hour = num("hour") % 24; // some engines print midnight as 24
+  const secondsToday = hour * 3600 + num("minute") * 60 + num("second");
+  return Math.max(60_000, (86400 - secondsToday) * 1000);
+}
+
+function noteLimit(model: string, body: string) {
+  let ms: number;
+  if (/PerDay|per day/i.test(body)) {
+    // the daily allowance is used up
+    ms = Math.min(msUntilPacificMidnight(), MAX_DAILY_BLOCK_MS);
+  } else {
+    // per-minute limit: Google usually says how long to wait ("retryDelay": "37s")
+    const m = body.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/);
+    ms = m ? Math.ceil(Number(m[1]) * 1000) + 1000 : 60_000;
+    ms = Math.min(Math.max(ms, 5_000), 120_000);
+  }
+  blockedUntil.set(model, Date.now() + ms);
+}
+
+function isBlocked(model: string): boolean {
+  const until = blockedUntil.get(model);
+  if (!until) return false;
+  if (until <= Date.now()) {
+    blockedUntil.delete(model);
+    return false;
+  }
+  return true;
+}
+
 // Sends one request and returns the parsed JSON answer.
 export async function callGeminiJson(opts: {
   model: string;
@@ -43,6 +93,16 @@ export async function callGeminiJson(opts: {
   if (!key) {
     // 401 = treated as a configuration problem by the API routes
     throw new GeminiError("GEMINI_API_KEY is not set on the server", 401, "config");
+  }
+
+  // This model is known to be out of requests right now: do not even ask.
+  // (429 + busy makes the callers switch to the next model, or tell the user to retry.)
+  if (isBlocked(opts.model)) {
+    throw new GeminiError(
+      `${opts.model} has reached its limit for now`,
+      429,
+      "busy"
+    );
   }
 
   const res = await fetch(
@@ -67,6 +127,7 @@ export async function callGeminiJson(opts: {
 
   if (!res.ok) {
     const text = await res.text();
+    if (res.status === 429) noteLimit(opts.model, text);
     const code =
       res.status === 429 || res.status >= 500
         ? "busy"
